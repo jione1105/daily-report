@@ -23,7 +23,6 @@ def get_available_reports(directory):
     return reports
 
   for f in os.listdir(directory):
-    # Daily_Report(YYYY-MM-DD).html 패턴 매칭
     match = re.search(r"Daily_Report\((\d{4}-\d{2}-\d{2})\)\.html", f)
     if match:
       date_str = match[1]
@@ -36,7 +35,7 @@ def get_available_reports(directory):
 if "selected_date" not in st.session_state:
   st.session_state.selected_date = None
 
-# 사이드바 구성 (KMI 브리핑 스타일 목록형)
+# 사이드바 구성 (목록형 날짜 선택)
 st.sidebar.title("📅 일일 브리핑 아카이브")
 st.sidebar.markdown("조회할 날짜를 선택해주세요.")
 st.sidebar.markdown("---")
@@ -50,16 +49,12 @@ if not reports_dict:
 else:
   date_list = list(reports_dict.keys())
 
-  # 초기 선택값 설정 (가장 최신 날짜)
   if st.session_state.selected_date not in reports_dict:
     st.session_state.selected_date = date_list[0]
 
-  # 드롭다운이 아닌 버튼(목록) 형태로 모든 날짜 표시
   st.sidebar.markdown("### 🗓️ 리포트 일자 목록")
   for date_str in date_list:
-    # 현재 선택된 날짜인지 확인하여 버튼 스타일 다르게 표시 (선택 강조)
     is_selected = date_str == st.session_state.selected_date
-    button_type = "primary" if is_selected else "secondary"
 
     if st.sidebar.button(
         f"📌  {date_str}", key=f"btn_{date_str}", use_container_width=True
@@ -68,11 +63,8 @@ else:
       st.rerun()
 
   st.sidebar.markdown("---")
-  st.sidebar.info(
-      "💡 좌측 목록에서 날짜를 클릭하면 해당 일자의 리포트가 우측에 표시됩니다."
-  )
 
-  # 메인 화면 영역 (중복 제목 제거 및 본문 즉시 출력)
+  # 메인 화면 영역 (스트림릿 자체 타이틀을 없애고 HTML 리포트 본문만 출력)
   selected_date = st.session_state.selected_date
   file_path = reports_dict[selected_date]
 
@@ -80,14 +72,8 @@ else:
     with open(file_path, "r", encoding="utf-8") as f:
       html_content = f.read()
 
-    # 상단 헤더 대신 선택된 날짜 정보만 깔끔하게 상단에 바 형태로 표시하고 바로 본문 렌더링
-    st.markdown(
-        f"### 📋 Daily Grain & Macro Market Report : **{selected_date}**"
-    )
-    st.markdown("---")
-
-    # 기존 HTML 리포트 본문 출력 (내부 제목과 중복되지 않도록 컴포넌트 렌더링)
-    components.html(html_content, height=1300, scrolling=True)
+    # HTML 본문만 컴포넌트로 렌더링 (중복 제목 원천 차단)
+    components.html(html_content, height=1350, scrolling=True)
 
   except Exception as e:
-    st.error(f"리포트를 불러오는 중 오류가 발생했습니다: {e}")
+    st.error(f"리포트를 불러오는 중 오류가 화면에 표시되는 도중 오류가 발생했습니다: {e}")
