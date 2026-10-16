@@ -11,29 +11,6 @@ st.set_page_config(
     layout="wide",
 )
 
-# [CSS 스타일 정밀 제어] 사이드바와 메인 영역의 패딩을 완전히 일치시킴
-st.markdown(
-    """
-    <style>
-        .block-container {
-            padding-top: 2.0rem !important;
-            padding-left: 2rem !important;
-            padding-right: 2rem !important;
-        }
-        section[data-testid="stSidebar"] .block-container {
-            padding-top: 2.0rem !important;
-            padding-left: 2rem !important;
-            padding-right: 2rem !important;
-        }
-        section[data-testid="stSidebar"] hr {
-            margin-left: 0rem !important;
-            margin-right: 0rem !important;
-        }
-    </style>
-""",
-    unsafe_allow_html=True,
-)
-
 # 리포트가 저장되는 폴더 경로
 REPORT_DIR = "reports_storage"
 os.makedirs(REPORT_DIR, exist_ok=True)
@@ -74,6 +51,12 @@ else:
   if st.session_state.selected_date not in reports_dict:
     st.session_state.selected_date = date_list[0]
 
+  # [핵심] 사이드바 타이틀과 실선 아래에 미세한 여백(Space)을 주어
+  # 첫 번째 날짜 버튼의 시작 위치를 우측 소제목("1. Grains Price & Commentary")과 완벽히 일치시킴
+  st.sidebar.markdown(
+      "<div style='margin-top: 28px;'></div>", unsafe_allow_html=True
+  )
+
   # 날짜 버튼 목록 배치
   for date_str in date_list:
     is_selected = date_str == st.session_state.selected_date
@@ -91,12 +74,6 @@ else:
   try:
     with open(file_path, "r", encoding="utf-8") as f:
       html_content = f.read()
-
-    # [핵심] HTML 파일 내부의 자체 여백(padding: 25px)을 강제로 제거하여 왼쪽 라인과 일치시킴
-    html_content = html_content.replace(
-        "<style>",
-        "<style>\n body { padding: 0px !important; margin: 0px !important; }",
-    )
 
     # HTML 리포트 본문 출력
     components.html(html_content, height=1350, scrolling=True)
