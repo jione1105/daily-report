@@ -11,7 +11,7 @@ st.set_page_config(
     layout="wide",
 )
 
-# [CSS 스타일] 사이드바 타이틀과 실선 위치 정렬
+# [CSS 스타일] 사이드바 타이틀, 실선 위치 정렬 및 선택된 날짜 버튼 음영(파란/하늘색 계열) 커스텀
 st.markdown(
     """
     <style>
@@ -28,6 +28,14 @@ st.markdown(
         section[data-testid="stSidebar"] hr {
             margin-left: 0rem !important;
             margin-right: 0rem !important;
+        }
+        
+        /* 현재 선택된 날짜 버튼을 채도 낮은 부드러운 하늘/파란색 계열로 음영 처리 */
+        div.stButton > button[kind="primary"] {
+            background-color: #E2EBF5 !important;
+            color: #1E3E62 !important;
+            border: 1px solid #B0C4DE !important;
+            font-weight: bold !important;
         }
     </style>
 """,
@@ -79,11 +87,10 @@ else:
       "<div style='margin-top: 24px;'></div>", unsafe_allow_html=True
   )
 
-  # 날짜 버튼 목록 배치 (현재 보고 있는 날짜에만 음영/강조 색상 적용)
+  # 날짜 버튼 목록 배치 (현재 보고 있는 날짜에만 은은한 하늘/파란색 음영 적용)
   for date_str in date_list:
     is_selected = date_str == st.session_state.selected_date
 
-    # KMI 브리핑처럼 현재 선택된 날짜 버튼을 강조하기 위해 type을 다르게 지정
     btn_type = "primary" if is_selected else "secondary"
 
     if st.sidebar.button(
