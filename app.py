@@ -11,18 +11,20 @@ st.set_page_config(
     layout="wide",
 )
 
-# [CSS 스타일 주입] 사이드바 여백 및 우측 본문 시작 위치를 완벽하게 맞춤
+# [CSS 스타일 주입] 사이드바와 메인 영역의 수평 시작점 및 실선 위치 완벽 일치화
 st.markdown(
     """
     <style>
-        /* 메인 상단 여백 제거 및 왼쪽 정렬 맞춤 */
+        /* 메인 영역 컨테이너 좌우/상단 여백 통일 */
         .block-container {
             padding-top: 1.5rem !important;
             padding-left: 2rem !important;
             padding-right: 2rem !important;
         }
-        /* 사이드바 내부 위쪽 여백 조정 */
+        /* 사이드바 내부 여백을 메인 영역과 똑같이 맞추어 실선(---) 시작점 일치화 */
         section[data-testid="stSidebar"] .block-container {
+            padding-left: 2rem !important;
+            padding-right: 2rem !important;
             padding-top: 2rem !important;
         }
     </style>
@@ -55,7 +57,7 @@ if "selected_date" not in st.session_state:
   st.session_state.selected_date = None
 
 # 사이드바 구성
-st.sidebar.title("📅 일일 리포트 아카이브")
+st.sidebar.title("📅 일일 브리핑 아카이브")
 st.sidebar.markdown("---")
 
 reports_dict = get_available_reports(REPORT_DIR)
