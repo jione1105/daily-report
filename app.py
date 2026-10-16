@@ -55,7 +55,7 @@ if "selected_date" not in st.session_state:
   st.session_state.selected_date = None
 
 # 사이드바 구성
-st.sidebar.title("📅 일일 브리핑 아카이브")
+st.sidebar.title("📅 일일 곡물 리포트 아카이브")
 st.sidebar.markdown("---")
 
 reports_dict = get_available_reports(REPORT_DIR)
