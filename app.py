@@ -58,7 +58,7 @@ def get_available_reports(directory):
 if "selected_date" not in st.session_state:
   st.session_state.selected_date = None
 
-# [변경 완료] 사이드바 타이틀을 '일일 리포트 아카이브'로 수정
+# 사이드바 타이틀 ('일일 리포트 아카이브')
 st.sidebar.title("📅 일일 리포트 아카이브")
 st.sidebar.markdown("---")
 
@@ -79,12 +79,15 @@ else:
       "<div style='margin-top: 24px;'></div>", unsafe_allow_html=True
   )
 
-  # 날짜 버튼 목록 배치
+  # 날짜 버튼 목록 배치 (현재 보고 있는 날짜에만 음영/강조 색상 적용)
   for date_str in date_list:
     is_selected = date_str == st.session_state.selected_date
 
+    # KMI 브리핑처럼 현재 선택된 날짜 버튼을 강조하기 위해 type을 다르게 지정
+    btn_type = "primary" if is_selected else "secondary"
+
     if st.sidebar.button(
-        f"📌  {date_str}", key=f"btn_{date_str}", use_container_width=True
+        f"📌  {date_str}", key=f"btn_{date_str}", type=btn_type, use_container_width=True
     ):
       st.session_state.selected_date = date_str
       st.rerun()
