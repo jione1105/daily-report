@@ -11,6 +11,29 @@ st.set_page_config(
     layout="wide",
 )
 
+# [CSS 스타일] 사이드바 타이틀과 실선 위치 정렬
+st.markdown(
+    """
+    <style>
+        .block-container {
+            padding-top: 2.0rem !important;
+            padding-left: 2rem !important;
+            padding-right: 2rem !important;
+        }
+        section[data-testid="stSidebar"] .block-container {
+            padding-top: 2.0rem !important;
+            padding-left: 2rem !important;
+            padding-right: 2rem !important;
+        }
+        section[data-testid="stSidebar"] hr {
+            margin-left: 0rem !important;
+            margin-right: 0rem !important;
+        }
+    </style>
+""",
+    unsafe_allow_html=True,
+)
+
 # 리포트가 저장되는 폴더 경로
 REPORT_DIR = "reports_storage"
 os.makedirs(REPORT_DIR, exist_ok=True)
@@ -31,12 +54,12 @@ def get_available_reports(directory):
   return dict(sorted(reports.items(), key=lambda x: x[0], reverse=True))
 
 
-# 세션 상태에 선택된 날짜 초기화
+# 세션 상태 초기화
 if "selected_date" not in st.session_state:
   st.session_state.selected_date = None
 
-# 사이드바 구성
-st.sidebar.title("📅 일일 브리핑 아카이브")
+# [변경 완료] 사이드바 타이틀을 '일일 리포트 아카이브'로 수정
+st.sidebar.title("📅 일일 리포트 아카이브")
 st.sidebar.markdown("---")
 
 reports_dict = get_available_reports(REPORT_DIR)
@@ -44,17 +67,16 @@ reports_dict = get_available_reports(REPORT_DIR)
 if not reports_dict:
   st.sidebar.warning("등록된 리포트가 없습니다.")
   st.title("📈 일일 곡물 및 원자재 시장 브리핑")
-  st.info("현재 아카이브된 리포트가 없습니다.")
+  st.info("reports_storage 폴더에 HTML 리포트 파일들을 넣어주세요.")
 else:
   date_list = list(reports_dict.keys())
 
   if st.session_state.selected_date not in reports_dict:
     st.session_state.selected_date = date_list[0]
 
-  # [핵심] 사이드바 타이틀과 실선 아래에 미세한 여백(Space)을 주어
-  # 첫 번째 날짜 버튼의 시작 위치를 우측 소제목("1. Grains Price & Commentary")과 완벽히 일치시킴
+  # 사이드바 실선 아래와 첫 번째 날짜 버튼 사이 미세 여백 (우측 소제목과 높이 일치화)
   st.sidebar.markdown(
-      "<div style='margin-top: 28px;'></div>", unsafe_allow_html=True
+      "<div style='margin-top: 24px;'></div>", unsafe_allow_html=True
   )
 
   # 날짜 버튼 목록 배치
@@ -67,13 +89,24 @@ else:
       st.session_state.selected_date = date_str
       st.rerun()
 
-  # 메인 화면 영역 (본문 렌더링)
+  # 메인 화면 영역 (HTML 본문 렌더링)
   selected_date = st.session_state.selected_date
   file_path = reports_dict[selected_date]
 
   try:
     with open(file_path, "r", encoding="utf-8") as f:
       html_content = f.read()
+
+    # HTML 파일 내부의 자체 여백(padding)을 제거하여 좌우 시작점 일치화
+    custom_style = (
+        "<style>\n body { padding: 0px !important; margin: 0px !important;"
+        " background-color: transparent !important; }\n h1 { margin-top: 0px"
+        " !important; padding-top: 0px !important; }\n</style>"
+    )
+    if "<head>" in html_content:
+      html_content = html_content.replace("<head>", f"<head>\n{custom_style}")
+    else:
+      html_content = custom_style + html_content
 
     # HTML 리포트 본문 출력
     components.html(html_content, height=1350, scrolling=True)
