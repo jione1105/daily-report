@@ -11,21 +11,26 @@ st.set_page_config(
     layout="wide",
 )
 
-# [CSS 스타일 주입] 사이드바와 메인 영역의 수평 시작점 및 실선 위치 완벽 일치화
+# [CSS 스타일 정밀 제어] 제목, 실선, 버튼과 소제목의 높이 및 수평 시작점 완벽 일치화
 st.markdown(
     """
     <style>
-        /* 메인 영역 컨테이너 좌우/상단 여백 통일 */
+        /* 메인 영역 상단 여백을 사이드바 타이틀과 동일한 높이로 맞춤 */
         .block-container {
-            padding-top: 1.5rem !important;
+            padding-top: 2.0rem !important;
             padding-left: 2rem !important;
             padding-right: 2rem !important;
         }
-        /* 사이드바 내부 여백을 메인 영역과 똑같이 맞추어 실선(---) 시작점 일치화 */
+        /* 사이드바 내부 여백을 메인 영역과 완벽하게 일치시킴 */
         section[data-testid="stSidebar"] .block-container {
+            padding-top: 2.0rem !important;
             padding-left: 2rem !important;
             padding-right: 2rem !important;
-            padding-top: 2rem !important;
+        }
+        /* 사이드바 내 구분선(hr)의 좌우 여백을 없애 실선 시작점과 끝점을 메인과 일치시킴 */
+        section[data-testid="stSidebar"] hr {
+            margin-left: 0rem !important;
+            margin-right: 0rem !important;
         }
     </style>
 """,
