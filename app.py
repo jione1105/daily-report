@@ -11,13 +11,19 @@ st.set_page_config(
     layout="wide",
 )
 
-# [CSS 스타일 주입] 우측 본문 상단 여백을 줄여 왼쪽 사이드바 시작점과 나란히 맞춤
+# [CSS 스타일 주입] 사이드바 여백 및 우측 본문 시작 위치를 완벽하게 맞춤
 st.markdown(
     """
     <style>
-        /* 메인 상단 여백 제거 */
+        /* 메인 상단 여백 제거 및 왼쪽 정렬 맞춤 */
         .block-container {
-            padding-top: 2.2rem !important;
+            padding-top: 1.5rem !important;
+            padding-left: 2rem !important;
+            padding-right: 2rem !important;
+        }
+        /* 사이드바 내부 위쪽 여백 조정 */
+        section[data-testid="stSidebar"] .block-container {
+            padding-top: 2rem !important;
         }
     </style>
 """,
@@ -48,7 +54,7 @@ def get_available_reports(directory):
 if "selected_date" not in st.session_state:
   st.session_state.selected_date = None
 
-# 사이드바 구성 (불필요한 안내문구 제거 및 타이틀 바로 아래 버튼 배치)
+# 사이드바 구성
 st.sidebar.title("📅 일일 브리핑 아카이브")
 st.sidebar.markdown("---")
 
@@ -64,7 +70,7 @@ else:
   if st.session_state.selected_date not in reports_dict:
     st.session_state.selected_date = date_list[0]
 
-  # 타이틀 바로 아래에 날짜 버튼 목록 배치
+  # 날짜 버튼 목록 배치
   for date_str in date_list:
     is_selected = date_str == st.session_state.selected_date
 
@@ -74,7 +80,7 @@ else:
       st.session_state.selected_date = date_str
       st.rerun()
 
-  # 메인 화면 영역 (중복 타이틀 없이 본문만 깔끔하게 렌더링)
+  # 메인 화면 영역 (본문 렌더링)
   selected_date = st.session_state.selected_date
   file_path = reports_dict[selected_date]
 
