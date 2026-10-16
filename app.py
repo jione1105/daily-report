@@ -11,23 +11,20 @@ st.set_page_config(
     layout="wide",
 )
 
-# [CSS 스타일 정밀 제어] 제목, 실선, 버튼과 소제목의 높이 및 수평 시작점 완벽 일치화
+# [CSS 스타일 정밀 제어] 사이드바와 메인 영역의 패딩을 완전히 일치시킴
 st.markdown(
     """
     <style>
-        /* 메인 영역 상단 여백을 사이드바 타이틀과 동일한 높이로 맞춤 */
         .block-container {
             padding-top: 2.0rem !important;
             padding-left: 2rem !important;
             padding-right: 2rem !important;
         }
-        /* 사이드바 내부 여백을 메인 영역과 완벽하게 일치시킴 */
         section[data-testid="stSidebar"] .block-container {
             padding-top: 2.0rem !important;
             padding-left: 2rem !important;
             padding-right: 2rem !important;
         }
-        /* 사이드바 내 구분선(hr)의 좌우 여백을 없애 실선 시작점과 끝점을 메인과 일치시킴 */
         section[data-testid="stSidebar"] hr {
             margin-left: 0rem !important;
             margin-right: 0rem !important;
@@ -94,6 +91,12 @@ else:
   try:
     with open(file_path, "r", encoding="utf-8") as f:
       html_content = f.read()
+
+    # [핵심] HTML 파일 내부의 자체 여백(padding: 25px)을 강제로 제거하여 왼쪽 라인과 일치시킴
+    html_content = html_content.replace(
+        "<style>",
+        "<style>\n body { padding: 0px !important; margin: 0px !important; }",
+    )
 
     # HTML 리포트 본문 출력
     components.html(html_content, height=1350, scrolling=True)
