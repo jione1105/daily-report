@@ -99,54 +99,47 @@ def parse_html_tables(file_path):
     return {}
 
 
-def generate_weekly_reports(directory):
-  """일일 리포트들을 월요일 기준으로 주차별 그룹화하여 주간 요약 파일 자동 생성"""
+def generate_weekly_reports_from_daily(directory):
+  """일일 HTML 파일들을 실제로 읽어 월요일 기준 1주 전/2주 전 평균 및 증감률을 계산해 주간 파일을 생성"""
   daily_reports = get_available_reports(directory, prefix="Daily_Report")
-  if not daily_reports:
+  if len(daily_reports) < 10:
+    # 2주치(10영업일) 미만이면 주간 요약 생성 불가
     return
 
-  # 날짜별 데이터 파싱 미리 수행
+  # 모든 일일 파일의 데이터를 미리 파싱
   daily_data_map = {}
   for d_str, f_path in daily_reports.items():
     daily_data_map[d_str] = parse_html_tables(f_path)
 
   sorted_dates = sorted(list(daily_reports.keys()))
 
-  # 각 날짜별로 해당 주의 월요일 구하기
-  # 월요일을 기준으로 주간 리포트 파일명 결정
-  weeks_map = {}
+  # 영업일들을 주 단위(월요일 기준)로 묶기
+  # 각 날짜가 속한 주의 월요일 구하기
+  weeks_dict = {}
   for d_str in sorted_dates:
     dt = datetime.strptime(d_str, "%Y-%m-%d")
-    # 월요일 계산 (weekday: 월=0 ... 일=6)
     monday_dt = dt - timedelta(days=dt.weekday())
     monday_str = monday_dt.strftime("%Y-%m-%d")
+    if monday_str not in weeks_dict:
+      weeks_dict[monday_str] = []
+    weeks_dict[monday_str].append(d_str)
 
-    if monday_str not in weeks_map:
-      weeks_map[monday_str] = []
-    weeks_map[monday_str].append(d_str)
+  sorted_mondays = sorted(list(weeks_dict.keys()))
 
-  # 모든 월요일에 대해, 직전 주(1주 전)와 그 전 주(2주 전) 데이터가 모두 확보된 경우 주간 파일 생성
-  all_mondays = sorted(list(weeks_map.keys()))
-
-  for i, current_monday in enumerate(all_mondays):
-    # 직전 주(1주 전)의 월요일 계산
-    prev_monday_dt = datetime.strptime(current_monday, "%Y-%m-%d") - timedelta(
-        days=7
-    )
-    prev_monday_str = prev_monday_dt.strftime("%Y-%m-%d")
-
-    # 1주 전 데이터와 2주 전 데이터를 모으기 위해 날짜 리스트 정렬 활용
-    # 현 주차 월요일 이전의 날짜들 중 최근 10영업일을 1주 전(최근 5일)과 2주 전(그 이전 5일)으로 확정
-    available_before = [d for d in sorted_dates if d < current_monday]
+  # 각 월요일마다 직전 주(1주 전)와 그 전 주(2주 전) 데이터를 조합해 주간 파일 생성
+  for monday_str in sorted_mondays:
+    # 해당 월요일 이전의 모든 일일 데이터 날짜들 추출
+    available_before = [d for d in sorted_dates if d < monday_str]
     if len(available_before) < 10:
+      # 직전 2주치 데이터가 안 쌓였으면 패스
       continue
 
-    prev_1week_dates = available_before[-5:]  # 1주 전 (직전 5영업일)
-    prev_2week_dates = available_before[-10:-5]  # 2주 전 (그 전 5영업일)
+    prev_1week_dates = available_before[-5:]  # 1주 전 (최근 5영업일)
+    prev_2week_dates = available_before[-10:-5]  # 2주 전 (그 이전 5영업일)
 
-    weekly_filename = os.path.join(
-        directory, f"Weekly_Report({current_monday}).html"
-    )
+    weekly_filename = os.path.join(directory, f"Weekly_Report({monday_str}).html")
+
+    # 이미 파일이 존재하면 중복 생성 방지
     if os.path.exists(weekly_filename):
       continue
 
@@ -204,7 +197,7 @@ def generate_weekly_reports(directory):
         <html>
         <head>
             <meta charset="utf-8">
-            <title>Weekly Market Summary ({current_monday})</title>
+            <title>Weekly Market Summary ({monday_str})</title>
             <style>
                 body {{ font-family: 'Malgun Gothic', 'Apple SD Gothic Neo', Arial, sans-serif; padding: 25px; line-height: 1.6; color: #333; }}
                 h1 {{ border-bottom: 2px solid #243642; padding-bottom: 10px; color: #243642; }}
@@ -215,7 +208,7 @@ def generate_weekly_reports(directory):
             </style>
         </head>
         <body>
-            <h1>📊 주간 시장 종합 요약 (기준일: {current_monday} 월요일)</h1>
+            <h1>📊 주간 시장 종합 요약 (기준일: {monday_str} 월요일)</h1>
             <h2>1. 주요 품목 및 지표 주간 평균 비교</h2>
             <p><b>1주 전 기간:</b> {prev_1week_dates[0]} ~ {prev_1week_dates[-1]} | <b>2주 전 기간:</b> {prev_2week_dates[0]} ~ {prev_2week_dates[-1]}</p>
             
@@ -226,7 +219,7 @@ def generate_weekly_reports(directory):
 
             <h2>2. 주간 종합 시황 요약</h2>
             <ul>
-                <li><b>곡물 시장:</b> {prev_1week_dates[0]} ~ {prev_1week_dates[-1]} 기간 동안의 주요 곡물 선물 및 FOB 가격은 수확 진척도와 글로벌 수급 이슈에 따라 등락을 보였습니다.</li>
+                <li><b>곡물 시장:</b> {prev_1week_dates[0]} ~ {prev_1week_dates[-1]} 주간 동안 주요 곡물 선물 및 FOB 가격은 수확 진척도와 글로벌 수급 이슈에 따라 등락을 보였습니다.</li>
                 <li><b>원유 시장:</b> 지정학적 리스크 및 산유국 동향이 반영되며 WTI, 브렌트, 두바이유의 주간 평균 가격이 조정되었습니다.</li>
                 <li><b>해상운임 시장:</b> 건화물선 부문의 선종별(BDI, BCI 등) 시황 변동에 연동되어 주간 운임 평균값이 형성되었습니다.</li>
             </ul>
@@ -237,8 +230,8 @@ def generate_weekly_reports(directory):
       wf.write(weekly_html)
 
 
-# 주간 요약 자동 생성 실행
-generate_weekly_reports(REPORT_DIR)
+# 앱 실행 시 일일 파일 기반 주간 요약 파일 자동 생성 실행
+generate_weekly_reports_from_daily(REPORT_DIR)
 
 # 세션 상태 초기화
 if "nav_mode" not in st.session_state:
