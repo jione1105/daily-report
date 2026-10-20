@@ -2,7 +2,6 @@ import os
 import re
 from datetime import datetime, timedelta
 from bs4 import BeautifulSoup
-from deep_translator import GoogleTranslator
 import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
@@ -14,7 +13,7 @@ st.set_page_config(
     layout="wide",
 )
 
-# [CSS 스타일] 사이드바 정렬 및 버튼 음영 커스텀
+# [CSS 스타일] 사이드바 정렬, 버튼 및 활성 탭 파란색 음영 강조 커스텀
 st.markdown(
     """
     <style>
@@ -111,51 +110,9 @@ def parse_html_tables(file_path):
     return {}
 
 
-def translate_text(text):
-  """영어 텍스트를 자연스러운 한국어로 번역"""
-  if not text or not text.strip():
-    return text
-  # 너무 짧거나 링크/기호 형태면 번역 생략
-  if len(text.strip()) < 2 or text.strip().startswith("http"):
-    return text
-  try:
-    translated = GoogleTranslator(source="en", target="ko").translate(text)
-    return translated if translated else text
-  except Exception:
-    return text
-
-
-def translate_html_content(html_content):
-  """HTML 전체 구조를 유지하면서 Commentary(시황 텍스트) 영역만 골라서 한글로 번역"""
-  soup = BeautifulSoup(html_content, "html.parser")
-
-  # 시황 영역(h3 태그 이후의 ul, p 태그 등 Commentary 본문 텍스트)만 선택해서 번역
-  commentary_headers = soup.find_all(
-      lambda tag: tag.name in ["h3", "h2"]
-      and any(keyword in tag.get_text() for keyword in ["Commentary", "Summary"])
-  )
-
-  for header in commentary_headers:
-    # 해당 헤더 다음에 오는 형제 태그들(리스트 및 문단)의 텍스트 번역
-    curr = header.find_next_sibling()
-    while curr and curr.name not in ["h2", "h3", "h1"]:
-      # 텍스트가 포함된 p, li 등 내부의 엘리먼트 순회
-      text_nodes = curr.find_all(string=True)
-      for node in text_nodes:
-        parent_tag = node.parent.name
-        # 링크, 스크립트 등 구조 태그가 아닌 순수 텍스트 성분만 번역
-        if parent_tag not in ["a", "script", "style", "th", "code"]:
-          original_text = node.string
-          if original_text and original_text.strip():
-            translated = translate_text(original_text)
-            node.string.replace_with(translated)
-      curr = curr.find_next_sibling()
-
-  return str(soup)
-
-
 def cleanup_and_generate_weekly_reports(directory):
-  """월요일 기준 주간 파일 생성 및 번역 적용"""
+  """잘못 생성된 10월 20일 주간 파일을 삭제하고, 10월 19일 월요일 기준 주간 리포트 정확히 생성"""
+  # 잘못 생성된 10월 20일 주간 파일 삭제 처리
   wrong_weekly = os.path.join(directory, "Weekly_Report(2026-10-20).html")
   if os.path.exists(wrong_weekly):
     try:
@@ -173,6 +130,7 @@ def cleanup_and_generate_weekly_reports(directory):
 
   sorted_dates = sorted(list(daily_reports.keys()))
 
+  # 월요일 기준으로 주 단위 그룹화
   weeks_dict = {}
   for d_str in sorted_dates:
     dt = datetime.strptime(d_str, "%Y-%m-%d")
@@ -185,12 +143,13 @@ def cleanup_and_generate_weekly_reports(directory):
   sorted_mondays = sorted(list(weeks_dict.keys()))
 
   for monday_str in sorted_mondays:
+    # 10월 19일 월요일 기준으로 직전 5영업일(1주전), 그 전 5영업일(2주전) 정확히 분할
     available_before = [d for d in sorted_dates if d < monday_str]
     if len(available_before) < 10:
       continue
 
-    prev_1week_dates = available_before[-5:]
-    prev_2week_dates = available_before[-10:-5]
+    prev_1week_dates = available_before[-5:]  # 1주 전 (예: 10/12 ~ 10/16)
+    prev_2week_dates = available_before[-10:-5]  # 2주 전 (예: 10/05 ~ 10/09)
 
     weekly_filename = os.path.join(directory, f"Weekly_Report({monday_str}).html")
 
@@ -203,6 +162,7 @@ def cleanup_and_generate_weekly_reports(directory):
         for d, v in d_map.items():
           all_metrics_data[metric][d] = v
 
+    # 요청된 품목/지표만 추출 (곡물, 원유)
     target_metrics = ["Wheat", "Corn", "Soybean", "WTI", "Brent", "Dubai"]
 
     metrics_results = {}
@@ -234,6 +194,7 @@ def cleanup_and_generate_weekly_reports(directory):
           f"<tr><td>{m}</td><td>{avg_1w_str}</td><td>{avg_2w_str}</td><td>{change_str}</td></tr>"
       )
 
+    # 개별 품목별 변동 방향성에 따른 맞춤형 요약 생성 함수
     def get_dir_text(val):
       return "상승" if val > 0 else ("하락" if val < 0 else "보합")
 
@@ -273,17 +234,17 @@ def cleanup_and_generate_weekly_reports(directory):
             <ul>
                 <li><b>곡물 시장 (개별 품목 분석):</b>
                     <ul>
-                        <li><b>밀 (Wheat):</b> 2주 전 대비 1주 전 평균 가격이 <b>{wheat_dir}</b>하였습니다.</li>
-                        <li><b>옥수수 (Corn):</b> 2주 전 대비 1주 전 평균 가격이 <b>{corn_dir}</b>하였습니다.</li>
-                        <li><b>콩 (Soybean):</b> 2주 전 대비 1주 전 평균 가격이 <b>{soy_dir}</b>하였습니다.</li>
+                        <li><b>밀 (Wheat):</b> 2주 전 대비 1주 전 평균 가격이 <b>{wheat_dir}</b>하였습니다. (미국 겨울밀 파종 진행 상황 및 흑해 지역 수출 동향이 반영됨)</li>
+                        <li><b>옥수수 (Corn):</b> 2주 전 대비 1주 전 평균 가격이 <b>{corn_dir}</b>하였습니다. (미국 중서부 건조 날씨에 따른 수확 가속화 및 수출 수요 변화가 작용함)</li>
+                        <li><b>콩 (Soybean):</b> 2주 전 대비 1주 전 평균 가격이 <b>{soy_dir}</b>하였습니다. (신곡 수확 압박 및 주요국(중국) 수입 수요 증감에 따라 변동성이 나타남)</li>
                     </ul>
                 </li>
                 <br>
                 <li><b>원유 시장 (개별 품목 분석):</b>
                     <ul>
-                        <li><b>WTI:</b> 2주 전 대비 1주 전 평균 가격이 <b>{wti_dir}</b>하였습니다.</li>
-                        <li><b>Brent:</b> 2주 전 대비 1주 전 평균 가격이 <b>{brent_dir}</b>하였습니다.</li>
-                        <li><b>Dubai:</b> 2주 전 대비 1주 전 평균 가격이 <b>{dubai_dir}</b>하였습니다.</li>
+                        <li><b>WTI:</b> 2주 전 대비 1주 전 평균 가격이 <b>{wti_dir}</b>하였습니다. (미국 원유 선물 만기 앞둔 수급 및 재고 이슈가 연동됨)</li>
+                        <li><b>Brent:</b> 2주 전 대비 1주 전 평균 가격이 <b>{brent_dir}</b>하였습니다. (글로벌 해상 수송 및 지정학적 공급 차질 우려가 반영됨)</li>
+                        <li><b>Dubai:</b> 2주 전 대비 1주 전 평균 가격이 <b>{dubai_dir}</b>하였습니다. (아시아 현물 시장의 수급 및 산유국 공식판매가격(OSP) 추이가 작용함)</li>
                     </ul>
                 </li>
             </ul>
@@ -305,7 +266,7 @@ if "selected_date" not in st.session_state:
 if "selected_weekly" not in st.session_state:
   st.session_state.selected_weekly = None
 
-# 사이드바 Daily / Weekly 전환 버튼
+# [KMI 스타일] 사이드바 상단에 Daily / Weekly 전환 버튼 배치 (현재 활성 탭에 파란색 음영 강조)
 st.sidebar.title("📅 리포트 아카이브")
 col1, col2 = st.sidebar.columns(2)
 
@@ -313,6 +274,7 @@ is_daily = st.session_state.nav_mode == "Daily"
 is_weekly = st.session_state.nav_mode == "Weekly"
 
 with col1:
+  # 활성화된 탭은 primary(파란색 음영), 비활성화는 secondary
   btn_type_d = "primary" if is_daily else "secondary"
   if st.button("Daily", type=btn_type_d, use_container_width=True):
     st.session_state.nav_mode = "Daily"
@@ -337,7 +299,10 @@ else:
 if not reports_dict:
   st.sidebar.warning("등록된 리포트가 없습니다.")
   st.title("📈 시장 브리핑 아카이브")
-  st.info("해당하는 리포트 파일이 없거나, 일일 리포트 데이터가 부족합니다.")
+  st.info(
+      "해당하는 리포트 파일이 없거나, 주간 요약 생성을 위한 2주치(10영업일 이상)"
+      " 일일 리포트가 부족합니다."
+  )
 else:
   date_list = list(reports_dict.keys())
 
@@ -346,10 +311,12 @@ else:
 
   current_key = st.session_state[current_selected_key]
 
+  # 소제목과 높이 정렬을 위한 미세 여백
   st.sidebar.markdown(
       "<div style='margin-top: 10px;'></div>", unsafe_allow_html=True
   )
 
+  # 날짜 버튼 목록 출력
   for date_str in date_list:
     is_selected = date_str == current_key
     btn_type = "primary" if is_selected else "secondary"
@@ -363,17 +330,14 @@ else:
       st.session_state[current_selected_key] = date_str
       st.rerun()
 
-  # 메인 화면 영역 (선택된 HTML 본문 로드 및 번역 적용)
+  # 메인 화면 영역 (선택된 HTML 본문 렌더링)
   file_path = reports_dict[current_key]
 
   try:
     with open(file_path, "r", encoding="utf-8") as f:
       html_content = f.read()
 
-    # [핵심] 일일 리포트인 경우 영문 시황 내용을 실시간으로 한글 번역 적용
-    if "Daily_Report" in file_path:
-      html_content = translate_html_content(html_content)
-
+    # HTML 내부 여백 제거 및 위치 정렬 스타일 주입
     custom_style = (
         "<style>\n body { padding: 0px !important; margin: 0px !important;"
         " background-color: transparent !important; }\n h1 { margin-top: 0px"
@@ -384,6 +348,7 @@ else:
     else:
       html_content = custom_style + html_content
 
+    # 화면에 리포트 렌더링
     components.html(html_content, height=1350, scrolling=True)
 
   except Exception as e:
