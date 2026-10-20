@@ -42,12 +42,12 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# [핵심 수정] app.py가 위치한 폴더를 기준 경로로 절대 고정
+# app.py가 위치한 폴더를 기준 경로로 절대 고정
 REPORT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 def get_available_reports(directory):
-  """기준 폴더 안의 HTML 파일명에서 날짜(YYYY-MM-DD)를 정확히 추출"""
+  """폴더 안의 HTML 파일명에서 날짜(YYYY-MM-DD)를 깔끔하게 추출"""
   reports = {}
   if not os.path.exists(directory):
     return reports
@@ -56,12 +56,13 @@ def get_available_reports(directory):
     if not f.lower().endswith(".html"):
       continue
 
+    # 파일명에서 YYYY-MM-DD 패턴 추출
     match = re.search(r"(\d{4}-\d{2}-\d{2})", f)
     if match:
       date_str = match[1]
       reports[date_str] = os.path.join(directory, f)
 
-  # 최신순 정렬
+  # 최신순 정렬 (내림차순)
   return dict(sorted(reports.items(), key=lambda x: x[0], reverse=True))
 
 
@@ -69,7 +70,7 @@ def get_available_reports(directory):
 if "selected_date" not in st.session_state:
   st.session_state.selected_date = None
 
-# 사이드바 타이틀
+# 사이드바 타이틀 ('일일 리포트 아카이브')
 st.sidebar.title("📅 일일 리포트 아카이브")
 st.sidebar.markdown("---")
 
@@ -79,8 +80,7 @@ if not reports_dict:
   st.sidebar.warning("등록된 리포트가 없습니다.")
   st.title("📈 일일 곡물 및 원자재 시장 브리핑")
   st.info(
-      f"⚠️ 현재 경로({REPORT_DIR})에 Daily_Report(YYYY-MM-DD).html 형식의"
-      " 파일이 없습니다."
+      f"⚠️ 현재 경로({REPORT_DIR})에 인식 가능한 HTML 리포트 파일이 없습니다."
   )
 else:
   date_list = list(reports_dict.keys())
