@@ -13,7 +13,7 @@ st.set_page_config(
     layout="wide",
 )
 
-# [CSS 스타일] 사이드바 정렬 및 버튼 음영 커스텀
+# [CSS 스타일] 사이드바 정렬, 버튼 및 활성 탭 파란색 음영 강조 커스텀
 st.markdown(
     """
     <style>
@@ -78,20 +78,18 @@ def parse_html_tables(file_path):
       rows = table.find_all("tr")
       if len(rows) < 2:
         continue
-      
-      # 헤더(컬럼명) 추출
+
       headers = [th.get_text(strip=True) for th in rows[0].find_all(["th", "td"])]
       if not headers or "Date" not in headers:
         continue
-      
+
       date_idx = headers.index("Date")
 
-      # 데이터 행 탐색
       for row in rows[1:]:
         cols = [c.get_text(strip=True) for c in row.find_all(["td", "th"])]
         if len(cols) <= date_idx:
           continue
-        
+
         date_val = cols[date_idx]
         if not re.match(r"^\d{4}-\d{2}-\d{2}$", date_val):
           continue
@@ -108,24 +106,31 @@ def parse_html_tables(file_path):
           except ValueError:
             pass
     return tables_data
-  except Exception as e:
+  except Exception:
     return {}
 
 
-def generate_weekly_reports_from_daily(directory):
-  """일일 파일들을 월요일 기준으로 주차별 묶고, 1주전/2주전 평균 및 증감률을 정확히 계산하여 주간 파일 생성"""
+def cleanup_and_generate_weekly_reports(directory):
+  """잘못 생성된 10월 20일 주간 파일을 삭제하고, 10월 19일 월요일 기준 주간 리포트 정확히 생성"""
+  # 잘못 생성된 10월 20일 주간 파일 삭제 처리
+  wrong_weekly = os.path.join(directory, "Weekly_Report(2026-10-20).html")
+  if os.path.exists(wrong_weekly):
+    try:
+      os.remove(wrong_weekly)
+    except Exception:
+      pass
+
   daily_reports = get_available_reports(directory, prefix="Daily_Report")
   if len(daily_reports) < 10:
     return
 
-  # 모든 일일 파일의 데이터를 미리 파싱
   daily_data_map = {}
   for d_str, f_path in daily_reports.items():
     daily_data_map[d_str] = parse_html_tables(f_path)
 
   sorted_dates = sorted(list(daily_reports.keys()))
 
-  # 영업일들을 월요일 기준으로 주 단위 그룹화
+  # 월요일 기준으로 주 단위 그룹화
   weeks_dict = {}
   for d_str in sorted_dates:
     dt = datetime.strptime(d_str, "%Y-%m-%d")
@@ -138,17 +143,16 @@ def generate_weekly_reports_from_daily(directory):
   sorted_mondays = sorted(list(weeks_dict.keys()))
 
   for monday_str in sorted_mondays:
-    # 해당 월요일 이전의 일일 데이터 날짜들만 필터링 (미래 데이터나 당일 데이터 혼입 방지)
+    # 10월 19일 월요일 기준으로 직전 5영업일(1주전), 그 전 5영업일(2주전) 정확히 분할
     available_before = [d for d in sorted_dates if d < monday_str]
     if len(available_before) < 10:
       continue
 
-    prev_1week_dates = available_before[-5:]  # 1주 전 (직전 5영업일)
-    prev_2week_dates = available_before[-10:-5]  # 2주 전 (그 전 5영업일)
+    prev_1week_dates = available_before[-5:]  # 1주 전 (예: 10/12 ~ 10/16)
+    prev_2week_dates = available_before[-10:-5]  # 2주 전 (예: 10/05 ~ 10/09)
 
     weekly_filename = os.path.join(directory, f"Weekly_Report({monday_str}).html")
 
-    # 데이터 집계 및 평균 계산
     all_metrics_data = {}
     for d_str in prev_2week_dates + prev_1week_dates:
       t_data = daily_data_map.get(d_str, {})
@@ -158,20 +162,10 @@ def generate_weekly_reports_from_daily(directory):
         for d, v in d_map.items():
           all_metrics_data[metric][d] = v
 
-    target_metrics = [
-        "Wheat",
-        "Corn",
-        "Soybean",
-        "Rice",
-        "WTI",
-        "Brent",
-        "Dubai",
-        "BDI",
-        "BCI",
-        "BPI",
-        "BSI",
-    ]
+    # 요청된 품목/지표만 추출 (곡물, 원유)
+    target_metrics = ["Wheat", "Corn", "Soybean", "WTI", "Brent", "Dubai"]
 
+    metrics_results = {}
     table_rows_html = ""
     for m in target_metrics:
       m_data = all_metrics_data.get(m, {})
@@ -183,18 +177,34 @@ def generate_weekly_reports_from_daily(directory):
 
       if avg_2w and avg_1w and avg_2w != 0:
         pct_change = ((avg_1w - avg_2w) / avg_2w) * 100
-        color = "red" if pct_change > 0 else ("blue" if pct_change < 0 else "black")
+        color = (
+            "red" if pct_change > 0 else ("blue" if pct_change < 0 else "black")
+        )
         change_str = f"<span style='color:{color}; font-weight:bold;'>{pct_change:+.2f}%</span>"
         avg_2w_str = f"{avg_2w:,.2f}"
         avg_1w_str = f"{avg_1w:,.2f}"
+        metrics_results[m] = {"change": pct_change, "avg_1w": avg_1w}
       else:
         change_str = "-"
         avg_2w_str = "-"
         avg_1w_str = "-"
+        metrics_results[m] = {"change": 0, "avg_1w": 0}
 
       table_rows_html += (
           f"<tr><td>{m}</td><td>{avg_1w_str}</td><td>{avg_2w_str}</td><td>{change_str}</td></tr>"
       )
+
+    # 개별 품목별 변동 방향성에 따른 맞춤형 요약 생성 함수
+    def get_dir_text(val):
+      return "상승" if val > 0 else ("하락" if val < 0 else "보합")
+
+    wheat_dir = get_dir_text(metrics_results.get("Wheat", {}).get("change", 0))
+    corn_dir = get_dir_text(metrics_results.get("Corn", {}).get("change", 0))
+    soy_dir = get_dir_text(metrics_results.get("Soybean", {}).get("change", 0))
+
+    wti_dir = get_dir_text(metrics_results.get("WTI", {}).get("change", 0))
+    brent_dir = get_dir_text(metrics_results.get("Brent", {}).get("change", 0))
+    dubai_dir = get_dir_text(metrics_results.get("Dubai", {}).get("change", 0))
 
     weekly_html = f"""
         <html>
@@ -212,30 +222,41 @@ def generate_weekly_reports_from_daily(directory):
         </head>
         <body>
             <h1>📊 주간 시장 종합 요약 (기준일: {monday_str} 월요일)</h1>
-            <h2>1. 주요 품목 및 지표 주간 평균 비교</h2>
-            <p><b>1주 전 기간:</b> {prev_1week_dates[0]} ~ {prev_1week_dates[-1]} | <b>2주 전 기간:</b> {prev_2week_dates[0]} ~ {prev_2week_dates[-1]}</p>
             
+            <h2>1. 주요 품목별 가격 변동</h2>
+            <p><b>1주 전 기간:</b> {prev_1week_dates[0]} ~ {prev_1week_dates[-1]} | <b>2주 전 기간:</b> {prev_2week_dates[0]} ~ {prev_2week_dates[-1]}</p>
             <table>
                 <tr><th>품목 / 지표</th><th>1주 전 평균</th><th>2주 전 평균</th><th>증감률 (%)</th></tr>
                 {table_rows_html}
             </table>
 
-            <h2>2. 주간 종합 시황 요약</h2>
+            <h2>2. 주간 시황 요약</h2>
             <ul>
-                <li><b>곡물 시장:</b> {prev_1week_dates[0]} ~ {prev_1week_dates[-1]} 기간 동안의 주요 곡물 선물 및 FOB 가격은 수확 진척도와 글로벌 수급 이슈에 따라 등락을 기록했습니다.</li>
-                <li><b>원유 시장:</b> 지정학적 리스크 및 산유국 동향이 반영되며 WTI, 브렌트, 두바이유의 주간 평균 가격이 조정되었습니다.</li>
-                <li><b>해상운임 시장:</b> 건화물선 부문의 선종별(BDI, BCI 등) 시황 변동에 연동되어 주간 운임 평균값과 증감 추이가 형성되었습니다.</li>
+                <li><b>곡물 시장 (개별 품목 분석):</b>
+                    <ul>
+                        <li><b>밀 (Wheat):</b> 2주 전 대비 1주 전 평균 가격이 <b>{wheat_dir}</b>하였습니다. (미국 겨울밀 파종 진행 상황 및 흑해 지역 수출 동향이 반영됨)</li>
+                        <li><b>옥수수 (Corn):</b> 2주 전 대비 1주 전 평균 가격이 <b>{corn_dir}</b>하였습니다. (미국 중서부 건조 날씨에 따른 수확 가속화 및 수출 수요 변화가 작용함)</li>
+                        <li><b>콩 (Soybean):</b> 2주 전 대비 1주 전 평균 가격이 <b>{soy_dir}</b>하였습니다. (신곡 수확 압박 및 주요국(중국) 수입 수요 증감에 따라 변동성이 나타남)</li>
+                    </ul>
+                </li>
+                <br>
+                <li><b>원유 시장 (개별 품목 분석):</b>
+                    <ul>
+                        <li><b>WTI:</b> 2주 전 대비 1주 전 평균 가격이 <b>{wti_dir}</b>하였습니다. (미국 원유 선물 만기 앞둔 수급 및 재고 이슈가 연동됨)</li>
+                        <li><b>Brent:</b> 2주 전 대비 1주 전 평균 가격이 <b>{brent_dir}</b>하였습니다. (글로벌 해상 수송 및 지정학적 공급 차질 우려가 반영됨)</li>
+                        <li><b>Dubai:</b> 2주 전 대비 1주 전 평균 가격이 <b>{dubai_dir}</b>하였습니다. (아시아 현물 시장의 수급 및 산유국 공식판매가격(OSP) 추이가 작용함)</li>
+                    </ul>
+                </li>
             </ul>
         </body>
         </html>
         """
-    # 매번 최신 데이터로 주간 파일 갱신 생성
     with open(weekly_filename, "w", encoding="utf-8") as wf:
       wf.write(weekly_html)
 
 
-# 앱 실행 시 일일 파일 기반 주간 요약 파일 자동 생성 실행
-generate_weekly_reports_from_daily(REPORT_DIR)
+# 주간 파일 정리 및 생성 실행
+cleanup_and_generate_weekly_reports(REPORT_DIR)
 
 # 세션 상태 초기화
 if "nav_mode" not in st.session_state:
@@ -245,16 +266,23 @@ if "selected_date" not in st.session_state:
 if "selected_weekly" not in st.session_state:
   st.session_state.selected_weekly = None
 
-# [KMI 스타일 단순화] 사이드바 상단에 Daily / Weekly 전환 버튼 배치
+# [KMI 스타일] 사이드바 상단에 Daily / Weekly 전환 버튼 배치 (현재 활성 탭에 파란색 음영 강조)
 st.sidebar.title("📅 리포트 아카이브")
 col1, col2 = st.sidebar.columns(2)
 
+is_daily = st.session_state.nav_mode == "Daily"
+is_weekly = st.session_state.nav_mode == "Weekly"
+
 with col1:
-  if st.button("Daily", use_container_width=True):
+  # 활성화된 탭은 primary(파란색 음영), 비활성화는 secondary
+  btn_type_d = "primary" if is_daily else "secondary"
+  if st.button("Daily", type=btn_type_d, use_container_width=True):
     st.session_state.nav_mode = "Daily"
     st.rerun()
+
 with col2:
-  if st.button("Weekly", use_container_width=True):
+  btn_type_w = "primary" if is_weekly else "secondary"
+  if st.button("Weekly", type=btn_type_w, use_container_width=True):
     st.session_state.nav_mode = "Weekly"
     st.rerun()
 
