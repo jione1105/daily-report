@@ -43,7 +43,7 @@ st.markdown(
 )
 
 # 리포트가 저장되는 폴더 경로
-REPORT_DIR = "."
+REPORT_DIR = "daily_report_archive"
 os.makedirs(REPORT_DIR, exist_ok=True)
 
 
