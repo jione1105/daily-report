@@ -17,13 +17,13 @@ st.markdown(
     <style>
         .block-container {
             padding-top: 2.0rem !important;
-            padding-left: 2rem !important;
-            padding-right: 2rem !important;
+            padding-left: 2.0rem !important;
+            padding-right: 2.0rem !important;
         }
         section[data-testid="stSidebar"] .block-container {
             padding-top: 2.0rem !important;
-            padding-left: 2rem !important;
-            padding-right: 2rem !important;
+            padding-left: 2.0rem !important;
+            padding-right: 2.0rem !important;
         }
         section[data-testid="stSidebar"] hr {
             margin-left: 0rem !important;
@@ -42,21 +42,21 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# app.py와 HTML 파일들이 함께 있는 현재 폴더(".")를 기준으로 설정
+# 현재 폴더(".")를 기준으로 HTML 리포트 탐색
 REPORT_DIR = "."
 
 
 def get_available_reports(directory):
-  """폴더 안의 모든 HTML 파일에서 날짜(YYYY-MM-DD)를 유연하게 추출"""
+  """폴더 안의 HTML 파일명에서 Daily_Report(YYYY-MM-DD).html 형식의 날짜를 정확히 추출"""
   reports = {}
   if not os.path.exists(directory):
     return reports
 
   for f in os.listdir(directory):
-    if not f.endswith(".html"):
+    if not f.lower().endswith(".html"):
       continue
 
-    # 파일명에서 YYYY-MM-DD 패턴을 유연하게 탐색 (예: Daily_Report(2026-10-16).html 또는 2026-10-16.html 등)
+    # Daily_Report(YYYY-MM-DD).html 또는 YYYY-MM-DD 형태 모두 정밀 매칭
     match = re.search(r"(\d{4}-\d{2}-\d{2})", f)
     if match:
       date_str = match[1]
@@ -70,7 +70,7 @@ def get_available_reports(directory):
 if "selected_date" not in st.session_state:
   st.session_state.selected_date = None
 
-# 사이드바 타이틀
+# 사이드바 타이틀 ('일일 리포트 아카이브')
 st.sidebar.title("📅 일일 리포트 아카이브")
 st.sidebar.markdown("---")
 
@@ -80,8 +80,7 @@ if not reports_dict:
   st.sidebar.warning("등록된 리포트가 없습니다.")
   st.title("📈 일일 곡물 및 원자재 시장 브리핑")
   st.info(
-      "⚠️ 현재 폴더에 날짜 형식(YYYY-MM-DD)이 포함된 HTML 파일이 없습니다."
-      " 파일명을 확인해주세요."
+      "⚠️ 현재 폴더에 Daily_Report(YYYY-MM-DD).html 형식의 파일이 없습니다."
   )
 else:
   date_list = list(reports_dict.keys())
@@ -94,7 +93,7 @@ else:
       "<div style='margin-top: 24px;'></div>", unsafe_allow_html=True
   )
 
-  # 날짜 버튼 목록 출력
+  # 날짜 버튼 목록 출력 (현재 선택된 날짜에 파란/하늘색 음영 적용)
   for date_str in date_list:
     is_selected = date_str == st.session_state.selected_date
     btn_type = "primary" if is_selected else "secondary"
