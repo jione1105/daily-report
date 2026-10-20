@@ -73,15 +73,12 @@ def parse_html_tables(file_path):
       soup = BeautifulSoup(f.read(), "html.parser")
 
     tables_data = {}
-    # HTML 내의 모든 테이블 탐색
     tables = soup.find_all("table")
     for table in tables:
       rows = table.find_all("tr")
       if not rows:
         continue
-      # 헤더 추출
       headers = [th.get_text(strip=True) for th in rows[0].find_all(["th", "td"])]
-      # 데이터 행 추출 (마지막 행들이 변동률이므로 종가 데이터 행들만 수집)
       for row in rows[1:]:
         cols = [c.get_text(strip=True) for c in row.find_all(["td", "th"])]
         if len(cols) == len(headers) and re.match(
@@ -103,20 +100,19 @@ def parse_html_tables(file_path):
 
 
 def generate_weekly_report_if_needed(directory):
-  """매주 월요일 기준 2주 전 평균 대비 1주 전 평균 및 증감률 계산 후 주간 요약 HTML 자동 생성"""
+  """주간 요약 파일 생성: 1주 전 기간 및 2주 전 기간의 실제 평균값과 증감률 계산"""
   daily_reports = get_available_reports(directory, prefix="Daily_Report")
   if not daily_reports:
     return
 
   dates = sorted(list(daily_reports.keys()))
   if len(dates) < 10:
-    # 2주치(최소 10영업일) 데이터가 안 쌓였으면 주간 생성 스킵
     return
 
-  # 최근 10영업일 데이터를 2주 전(앞 5일)과 1주 전(뒤 5일)로 분할
+  # 최근 10영업일을 기준으로 앞 5일(2주 전), 뒤 5일(1주 전) 지정
   target_10_dates = dates[-10:]
-  prev_2week_dates = target_10_dates[:5]  # 2주 전 (5영업일)
-  prev_1week_dates = target_10_dates[5:]  # 1주 전 (5영업일)
+  prev_2week_dates = target_10_dates[:5]  # 2주 전
+  prev_1week_dates = target_10_dates[5:]  # 1주 전
 
   week_end_str = target_10_dates[-1]
   weekly_filename = os.path.join(
@@ -126,7 +122,7 @@ def generate_weekly_report_if_needed(directory):
   if os.path.exists(weekly_filename):
     return
 
-  # 10일치 데이터 수집 및 평균 계산
+  # 데이터 집계 및 파싱
   all_metrics_data = {}
   for d_str in target_10_dates:
     t_data = parse_html_tables(daily_reports[d_str])
@@ -136,7 +132,6 @@ def generate_weekly_report_if_needed(directory):
       if d_str in d_map:
         all_metrics_data[metric][d_str] = d_map[d_str]
 
-  # 비교 대상 지표 목록
   target_metrics = [
       "Wheat",
       "Corn",
@@ -154,11 +149,9 @@ def generate_weekly_report_if_needed(directory):
   table_rows_html = ""
   for m in target_metrics:
     m_data = all_metrics_data.get(m, {})
-    # 2주 전 평균
     val_2w = [m_data[d] for d in prev_2week_dates if d in m_data]
     avg_2w = sum(val_2w) / len(val_2w) if val_2w else None
 
-    # 1주 전 평균
     val_1w = [m_data[d] for d in prev_1week_dates if d in m_data]
     avg_1w = sum(val_1w) / len(val_1w) if val_1w else None
 
@@ -192,20 +185,20 @@ def generate_weekly_report_if_needed(directory):
         </style>
     </head>
     <body>
-        <h1>📊 Weekly Market Summary & Trend Analysis ( ~ {week_end_str})</h1>
-        <h2>1. 주간 주요 지표 평균 비교 (2주 전 대비 1주 전)</h2>
+        <h1>📊 주간 시장 종합 요약 ( ~ {week_end_str})</h1>
+        <h2>1. 주요 품목 및 지표 주간 평균 비교</h2>
         <p><b>1주 전 기간:</b> {prev_1week_dates[0]} ~ {prev_1week_dates[-1]} | <b>2주 전 기간:</b> {prev_2week_dates[0]} ~ {prev_2week_dates[-1]}</p>
         
         <table>
-            <tr><th>품목 / 지표</th><th>1주 전 평균</th><th>2주 전 평균</th><th>주간 증감률 (%)</th></tr>
+            <tr><th>품목 / 지표</th><th>1주 전 평균</th><th>2주 전 평균</th><th>증감률 (%)</th></tr>
             {table_rows_html}
         </table>
 
         <h2>2. 주간 종합 시황 요약</h2>
         <ul>
-            <li><b>곡물 시장:</b> 글로벌 수급 동향 및 주요 수출국의 작황 진행 상황에 따라 품목별 등락이 엇갈렸습니다.</li>
-            <li><b>원유 시장:</b> 지정학적 리스크 및 재고 변동성에 따른 가격 민감도가 높게 유지되었습니다.</li>
-            <li><b>해상운임 시장:</b> 선종별 용선료 변화에 따라 건화물선 지수의 주간 평균 흐름이 조정되었습니다.</li>
+            <li><b>곡물 시장:</b> 미국 수확 진행 상황과 흑해 지역 공급 불확실성이 상존하며 주요 곡물 가격의 등락이 엇갈렸습니다.</li>
+            <li><b>원유 시장:</b> 지정학적 리스크 및 주요 산유국의 공급 동향에 따라 유가가 민감하게 반응하였습니다.</li>
+            <li><b>해상운임 시장:</b> 선종별 수요 변화에 연동되어 건화물선 운임지수(BDI 등)의 주간 평균 흐름이 조정세를 보였습니다.</li>
         </ul>
     </body>
     </html>
@@ -214,7 +207,7 @@ def generate_weekly_report_if_needed(directory):
     wf.write(weekly_html)
 
 
-# 주간 요약 자동 생성 체크 실행
+# 주간 요약 자동 생성 실행
 generate_weekly_report_if_needed(REPORT_DIR)
 
 # 세션 상태 초기화
@@ -225,48 +218,47 @@ if "selected_date" not in st.session_state:
 if "selected_weekly" not in st.session_state:
   st.session_state.selected_weekly = None
 
-# 좌측 상단 탭 전환 (Daily / Weekly)
-st.sidebar.title("📁 리포트 메뉴")
-nav = st.sidebar.radio(
-    "모드 선택",
-    ["일별 리포트 (Daily)", "주간 요약 (Weekly)"],
-    index=0 if st.session_state.nav_mode == "Daily" else 1,
-)
+# [KMI 스타일 단순화] 사이드바 상단에 깔끔한 Daily / Weekly 전환 버튼 배치
+st.sidebar.title("📅 리포트 아카이브")
+col1, col2 = st.sidebar.columns(2)
+
+with col1:
+  if st.button("Daily", use_container_width=True):
+    st.session_state.nav_mode = "Daily"
+    st.rerun()
+with col2:
+  if st.button("Weekly", use_container_width=True):
+    st.session_state.nav_mode = "Weekly"
+    st.rerun()
+
 st.sidebar.markdown("---")
 
-if "일별" in nav:
-  st.session_state.nav_mode = "Daily"
-  st.sidebar.title("📅 일일 리포트 아카이브")
+# 모드별 리포트 딕셔너리 로드
+if st.session_state.nav_mode == "Daily":
   reports_dict = get_available_reports(REPORT_DIR, prefix="Daily_Report")
+  current_selected_key = "selected_date"
 else:
-  st.session_state.nav_mode = "Weekly"
-  st.sidebar.title("📅 주간 요약 아카이브")
   reports_dict = get_available_reports(REPORT_DIR, prefix="Weekly_Report")
-
-st.sidebar.markdown("---")
+  current_selected_key = "selected_weekly"
 
 if not reports_dict:
   st.sidebar.warning("등록된 리포트가 없습니다.")
-  st.title("📈 일일 및 주간 시장 브리핑")
+  st.title("📈 시장 브리핑 아카이브")
   st.info(
-      "해당하는 리포트 파일이 폴더에 존재하지 않거나, 주간 요약 생성을 위한"
-      " 2주치(10영업일 이상) 일일 리포트가 부족합니다."
+      "해당하는 리포트 파일이 없거나, 주간 요약 생성을 위한 2주치 일일"
+      " 리포트가 부족합니다."
   )
 else:
   date_list = list(reports_dict.keys())
 
-  if st.session_state.nav_mode == "Daily":
-    if st.session_state.selected_date not in reports_dict:
-      st.session_state.selected_date = date_list[0]
-    current_key = st.session_state.selected_date
-  else:
-    if st.session_state.selected_weekly not in reports_dict:
-      st.session_state.selected_weekly = date_list[0]
-    current_key = st.session_state.selected_weekly
+  if st.session_state[current_selected_key] not in reports_dict:
+    st.session_state[current_selected_key] = date_list[0]
+
+  current_key = st.session_state[current_selected_key]
 
   # 소제목과 높이 정렬을 위한 미세 여백
   st.sidebar.markdown(
-      "<div style='margin-top: 24px;'></div>", unsafe_allow_html=True
+      "<div style='margin-top: 10px;'></div>", unsafe_allow_html=True
   )
 
   # 날짜 버튼 목록 출력
@@ -275,21 +267,16 @@ else:
     btn_type = "primary" if is_selected else "secondary"
 
     if st.sidebar.button(
-        f"📌  {date_str}", key=f"btn_{nav}_{date_str}", type=btn_type, use_container_width=True
+        f"📌  {date_str}",
+        key=f"btn_{st.session_state.nav_mode}_{date_str}",
+        type=btn_type,
+        use_container_width=True,
     ):
-      if st.session_state.nav_mode == "Daily":
-        st.session_state.selected_date = date_str
-      else:
-        st.session_state.selected_weekly = date_str
+      st.session_state[current_selected_key] = date_str
       st.rerun()
 
   # 메인 화면 영역 (선택된 HTML 본문 렌더링)
-  target_key = (
-      st.session_state.selected_date
-      if st.session_state.nav_mode == "Daily"
-      else st.session_state.selected_weekly
-  )
-  file_path = reports_dict[target_key]
+  file_path = reports_dict[current_key]
 
   try:
     with open(file_path, "r", encoding="utf-8") as f:
