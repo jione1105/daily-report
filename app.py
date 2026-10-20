@@ -67,7 +67,7 @@ def get_available_reports(directory, prefix="Daily_Report"):
 
 
 def parse_html_tables(file_path):
-  """일일 HTML 파일 안의 테이블 데이터를 파싱하여 딕셔너리로 추출"""
+  """일일 HTML 파일 안의 모든 테이블에서 날짜별 지표 수치를 정밀하게 추출"""
   try:
     with open(file_path, "r", encoding="utf-8") as f:
       soup = BeautifulSoup(f.read(), "html.parser")
@@ -76,34 +76,46 @@ def parse_html_tables(file_path):
     tables = soup.find_all("table")
     for table in tables:
       rows = table.find_all("tr")
-      if not rows:
+      if len(rows) < 2:
         continue
+      
+      # 헤더(컬럼명) 추출
       headers = [th.get_text(strip=True) for th in rows[0].find_all(["th", "td"])]
+      if not headers or "Date" not in headers:
+        continue
+      
+      date_idx = headers.index("Date")
+
+      # 데이터 행 탐색
       for row in rows[1:]:
         cols = [c.get_text(strip=True) for c in row.find_all(["td", "th"])]
-        if len(cols) == len(headers) and re.match(
-            r"^\d{4}-\d{2}-\d{2}$", cols[0]
-        ):
-          date_val = cols[0]
-          for i, h in enumerate(headers[1:], 1):
-            if i < len(cols):
-              try:
-                val = float(cols[i].replace(",", ""))
-                if h not in tables_data:
-                  tables_data[h] = {}
-                tables_data[h][date_val] = val
-              except ValueError:
-                pass
+        if len(cols) <= date_idx:
+          continue
+        
+        date_val = cols[date_idx]
+        if not re.match(r"^\d{4}-\d{2}-\d{2}$", date_val):
+          continue
+
+        for i, h in enumerate(headers):
+          if i == date_idx or i >= len(cols):
+            continue
+          raw_val = cols[i].replace(",", "").replace("$", "")
+          try:
+            val = float(raw_val)
+            if h not in tables_data:
+              tables_data[h] = {}
+            tables_data[h][date_val] = val
+          except ValueError:
+            pass
     return tables_data
-  except Exception:
+  except Exception as e:
     return {}
 
 
 def generate_weekly_reports_from_daily(directory):
-  """일일 HTML 파일들을 실제로 읽어 월요일 기준 1주 전/2주 전 평균 및 증감률을 계산해 주간 파일을 생성"""
+  """일일 파일들을 월요일 기준으로 주차별 묶고, 1주전/2주전 평균 및 증감률을 정확히 계산하여 주간 파일 생성"""
   daily_reports = get_available_reports(directory, prefix="Daily_Report")
   if len(daily_reports) < 10:
-    # 2주치(10영업일) 미만이면 주간 요약 생성 불가
     return
 
   # 모든 일일 파일의 데이터를 미리 파싱
@@ -113,8 +125,7 @@ def generate_weekly_reports_from_daily(directory):
 
   sorted_dates = sorted(list(daily_reports.keys()))
 
-  # 영업일들을 주 단위(월요일 기준)로 묶기
-  # 각 날짜가 속한 주의 월요일 구하기
+  # 영업일들을 월요일 기준으로 주 단위 그룹화
   weeks_dict = {}
   for d_str in sorted_dates:
     dt = datetime.strptime(d_str, "%Y-%m-%d")
@@ -126,22 +137,16 @@ def generate_weekly_reports_from_daily(directory):
 
   sorted_mondays = sorted(list(weeks_dict.keys()))
 
-  # 각 월요일마다 직전 주(1주 전)와 그 전 주(2주 전) 데이터를 조합해 주간 파일 생성
   for monday_str in sorted_mondays:
-    # 해당 월요일 이전의 모든 일일 데이터 날짜들 추출
+    # 해당 월요일 이전의 일일 데이터 날짜들만 필터링 (미래 데이터나 당일 데이터 혼입 방지)
     available_before = [d for d in sorted_dates if d < monday_str]
     if len(available_before) < 10:
-      # 직전 2주치 데이터가 안 쌓였으면 패스
       continue
 
-    prev_1week_dates = available_before[-5:]  # 1주 전 (최근 5영업일)
-    prev_2week_dates = available_before[-10:-5]  # 2주 전 (그 이전 5영업일)
+    prev_1week_dates = available_before[-5:]  # 1주 전 (직전 5영업일)
+    prev_2week_dates = available_before[-10:-5]  # 2주 전 (그 전 5영업일)
 
     weekly_filename = os.path.join(directory, f"Weekly_Report({monday_str}).html")
-
-    # 이미 파일이 존재하면 중복 생성 방지
-    if os.path.exists(weekly_filename):
-      continue
 
     # 데이터 집계 및 평균 계산
     all_metrics_data = {}
@@ -150,8 +155,8 @@ def generate_weekly_reports_from_daily(directory):
       for metric, d_map in t_data.items():
         if metric not in all_metrics_data:
           all_metrics_data[metric] = {}
-        if d_str in d_map:
-          all_metrics_data[metric][d_str] = d_map[d_str]
+        for d, v in d_map.items():
+          all_metrics_data[metric][d] = v
 
     target_metrics = [
         "Wheat",
@@ -178,9 +183,7 @@ def generate_weekly_reports_from_daily(directory):
 
       if avg_2w and avg_1w and avg_2w != 0:
         pct_change = ((avg_1w - avg_2w) / avg_2w) * 100
-        color = (
-            "red" if pct_change > 0 else ("blue" if pct_change < 0 else "black")
-        )
+        color = "red" if pct_change > 0 else ("blue" if pct_change < 0 else "black")
         change_str = f"<span style='color:{color}; font-weight:bold;'>{pct_change:+.2f}%</span>"
         avg_2w_str = f"{avg_2w:,.2f}"
         avg_1w_str = f"{avg_1w:,.2f}"
@@ -219,13 +222,14 @@ def generate_weekly_reports_from_daily(directory):
 
             <h2>2. 주간 종합 시황 요약</h2>
             <ul>
-                <li><b>곡물 시장:</b> {prev_1week_dates[0]} ~ {prev_1week_dates[-1]} 주간 동안 주요 곡물 선물 및 FOB 가격은 수확 진척도와 글로벌 수급 이슈에 따라 등락을 보였습니다.</li>
+                <li><b>곡물 시장:</b> {prev_1week_dates[0]} ~ {prev_1week_dates[-1]} 기간 동안의 주요 곡물 선물 및 FOB 가격은 수확 진척도와 글로벌 수급 이슈에 따라 등락을 기록했습니다.</li>
                 <li><b>원유 시장:</b> 지정학적 리스크 및 산유국 동향이 반영되며 WTI, 브렌트, 두바이유의 주간 평균 가격이 조정되었습니다.</li>
-                <li><b>해상운임 시장:</b> 건화물선 부문의 선종별(BDI, BCI 등) 시황 변동에 연동되어 주간 운임 평균값이 형성되었습니다.</li>
+                <li><b>해상운임 시장:</b> 건화물선 부문의 선종별(BDI, BCI 등) 시황 변동에 연동되어 주간 운임 평균값과 증감 추이가 형성되었습니다.</li>
             </ul>
         </body>
         </html>
         """
+    # 매번 최신 데이터로 주간 파일 갱신 생성
     with open(weekly_filename, "w", encoding="utf-8") as wf:
       wf.write(weekly_html)
 
