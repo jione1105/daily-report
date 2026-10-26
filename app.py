@@ -193,8 +193,8 @@ def generate_ai_market_summary(item_key, change_val, v1, v2, raw_texts):
   """
 
   try:
-    # Gemini 모델 호출 (gemini-1.5-flash 사용)
-    model = genai.GenerativeModel("gemini-1.5-flash")
+    # [수정] 안정적인 'gemini-1.5-pro' 모델로 변경
+    model = genai.GenerativeModel("gemini-1.5-pro")
     response = model.generate_content(prompt)
     ai_summary = response.text.strip()
   except Exception as e:
