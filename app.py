@@ -2,6 +2,7 @@ import os
 import re
 from datetime import datetime, timedelta
 from bs4 import BeautifulSoup
+from deep_translator import GoogleTranslator
 import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
@@ -111,16 +112,15 @@ def parse_html_tables(file_path):
 
 
 def parse_commentary_content(file_path):
-  """일일 HTML 파일에서 각 품목별 시황(Commentary) 문장들을 파싱하여 추출"""
+  """일일 HTML 파일에서 각 품목별 시황 문장들을 파싱하여 추출"""
   try:
     with open(file_path, "r", encoding="utf-8") as f:
       soup = BeautifulSoup(f.read(), "html.parser")
 
     commentaries = {}
-    h3_tags = soup.find_all("h3")
+    h3_tags = soup.find_all(["h3", "h4", "h2"])
     for h3 in h3_tags:
       title = h3.get_text(strip=True)
-      # 품목 매칭 키워드 설정
       key = None
       if "Wheat" in title:
         key = "Wheat"
@@ -128,27 +128,39 @@ def parse_commentary_content(file_path):
         key = "Corn"
       elif "Soybean" in title:
         key = "Soybean"
-      elif "Crude Oil" in title or "Oil" in title:
+      elif "Crude Oil" in title or "Oil" in title or "WTI" in title:
         key = "Oil"
 
       if key:
         sentences = []
-        # h3 다음 형제 요소들 중 ul 또는 p 태그 안의 텍스트 수집
         curr = h3.find_next_sibling()
-        while curr and curr.name not in ["h2", "h3", "h1"]:
-          for li in curr.find_all(["li", "p"]):
-            txt = li.get_text(strip=True)
+        while curr and curr.name not in ["h2", "h3", "h4", "h1"]:
+          for el in curr.find_all(["li", "p"]):
+            txt = el.get_text(strip=True)
             if txt and len(txt) > 10:
               sentences.append(txt)
           curr = curr.find_next_sibling()
-        commentaries[key] = sentences
+        if key not in commentaries:
+          commentaries[key] = []
+        commentaries[key].extend(sentences)
     return commentaries
   except Exception:
     return {}
 
 
+def translate_text(text):
+  """영어 문장을 자연스러운 한국어로 번역"""
+  if not text or not text.strip():
+    return text
+  try:
+    translated = GoogleTranslator(source="en", target="ko").translate(text)
+    return translated if translated else text
+  except Exception:
+    return text
+
+
 def cleanup_and_generate_weekly_reports(directory):
-  """월요일 기준으로 각 주차별 1주 전/2주 전 데이터 비교 및 실제 시황 문장 동적 추출하여 주간 리포트 생성"""
+  """월요일 기준 주간 파일 생성: 1주전/2주전 비교 및 가격 방향성에 맞는 시황 선별 후 한글 요약 번역"""
   wrong_weekly = os.path.join(directory, "Weekly_Report(2026-10-20).html")
   if os.path.exists(wrong_weekly):
     try:
@@ -244,48 +256,77 @@ def cleanup_and_generate_weekly_reports(directory):
           f"<tr><td>{m}</td><td>{avg_1w_str}</td><td>{avg_2w_str}</td><td>{change_str}</td></tr>"
       )
 
-    # [핵심] 1주 전 기간의 일일 파일들에서 실제 시황 문장을 수집하여 방향성에 맞게 추출
-    def extract_trend_sentences(item_key, change_val):
-      trend_word = (
-          "lower"
-          if change_val < 0
-          else ("higher" if change_val > 0 else "steady")
-      )
-      collected = []
+    # [핵심] 1주 전 5일치 시황 중 가격 방향성(상승/하락)에 맞는 문장만 선별하여 한글 번역
+    def get_trend_summary_korean(item_key, change_val):
+      if change_val > 0:
+        trend_keywords = [
+            "rose",
+            "gain",
+            "higher",
+            "increase",
+            "up",
+            "rally",
+            "surge",
+            "growth",
+        ]
+        dir_text = "상승"
+      elif change_val < 0:
+        trend_keywords = [
+            "fall",
+            "fell",
+            "drop",
+            "lower",
+            "decline",
+            "decrease",
+            "down",
+            "pressure",
+            "slip",
+        ]
+        dir_text = "하락"
+      else:
+        trend_keywords = []
+        dir_text = "보합"
+
+      collected_eng = []
+      # 1주 전 5일 파일 순회
       for d_str in prev_1week_dates:
         comms = daily_commentary_map.get(d_str, {})
-        sentences = comms.get(item_key, [])
+        # 원유(WTI, Brent, Dubai)는 'Oil' 카테고리 참조
+        lookup_key = "Oil" if item_key in ["WTI", "Brent", "Dubai"] else item_key
+        sentences = comms.get(lookup_key, [])
+
         for s in sentences:
-          # 가격 변동 방향성(상승/하락 관련 단어)이 포함된 문장 우선 추출
           s_lower = s.lower()
-          if (
-              trend_word in s_lower
-              or "fall" in s_lower
-              or "drop" in s_lower
-              or "rose" in s_lower
-              or "gain" in s_lower
-              or "pressure" in s_lower
-          ):
-            if s not in collected:
-              collected.append(s)
-      if not collected:
-        # 매칭되는 문장이 없으면 해당 주의 첫 번째 문장 활용
+          # 방향성 키워드가 포함된 문장 우선 선별
+          if any(kw in s_lower for kw in trend_keywords):
+            if s not in collected_eng:
+              collected_eng.append(s)
+
+      # 만약 키워드에 정확히 일치하는 문장이 없다면 해당 주의 첫 문장 활용
+      if not collected_eng:
         for d_str in prev_1week_dates:
           comms = daily_commentary_map.get(d_str, {})
-          sentences = comms.get(item_key, [])
+          lookup_key = (
+              "Oil" if item_key in ["WTI", "Brent", "Dubai"] else item_key
+          )
+          sentences = comms.get(lookup_key, [])
           if sentences:
-            collected.append(sentences[0])
+            collected_eng.append(sentences[0])
             break
-      return (
-          collected[:2]
-          if collected
-          else [
-              f"해당 주간 {item_key} 품목의 특이 가격 변동 요인이 관측되었습니다."
-          ]
-      )
 
-    def get_dir_text(val):
-      return "상승" if val > 0 else ("하락" if val < 0 else "보합")
+      # 상위 1~2개 문장만 한국어로 번역 (속도 최적화)
+      korean_sentences = []
+      for eng_s in collected_eng[:2]:
+        ko_s = translate_text(eng_s)
+        if ko_s:
+          korean_sentences.append(ko_s)
+
+      if not korean_sentences:
+        korean_sentences.append(
+            f"해당 주간 {item_key} 가격 변동 관련 특이 동향이 관측되었습니다."
+        )
+
+      return dir_text, korean_sentences
 
     w_change = metrics_results.get("Wheat", {}).get("change", 0)
     c_change = metrics_results.get("Corn", {}).get("change", 0)
@@ -295,13 +336,13 @@ def cleanup_and_generate_weekly_reports(directory):
     brent_change = metrics_results.get("Brent", {}).get("change", 0)
     dubai_change = metrics_results.get("Dubai", {}).get("change", 0)
 
-    wheat_sentences = extract_trend_sentences("Wheat", w_change)
-    corn_sentences = extract_trend_sentences("Corn", c_change)
-    soy_sentences = extract_trend_sentences("Soybean", s_change)
+    w_dir, w_text = get_trend_summary_korean("Wheat", w_change)
+    c_dir, c_text = get_trend_summary_korean("Corn", c_change)
+    s_dir, s_text = get_trend_summary_korean("Soybean", s_change)
 
-    oil_wti_sentences = extract_trend_sentences("Oil", wti_change)
-    oil_brent_sentences = extract_trend_sentences("Oil", brent_change)
-    oil_dubai_sentences = extract_trend_sentences("Oil", dubai_change)
+    wti_dir, wti_text = get_trend_summary_korean("WTI", wti_change)
+    brent_dir, brent_text = get_trend_summary_korean("Brent", brent_change)
+    dubai_dir, dubai_text = get_trend_summary_korean("Dubai", dubai_change)
 
     def format_li(sentences):
       return "".join([f"<li>{s}</li>" for s in sentences])
@@ -336,28 +377,28 @@ def cleanup_and_generate_weekly_reports(directory):
             <ul>
                 <li><b>곡물 시장 (개별 품목 분석):</b>
                     <ul>
-                        <li><b>밀 (Wheat - {get_dir_text(w_change)}):</b>
-                            <ul>{format_li(wheat_sentences)}</ul>
+                        <li><b>밀 (Wheat - {w_dir}):</b>
+                            <ul>{format_li(w_text)}</ul>
                         </li>
-                        <li><b>옥수수 (Corn - {get_dir_text(c_change)}):</b>
-                            <ul>{format_li(corn_sentences)}</ul>
+                        <li><b>옥수수 (Corn - {c_dir}):</b>
+                            <ul>{format_li(c_text)}</ul>
                         </li>
-                        <li><b>콩 (Soybean - {get_dir_text(s_change)}):</b>
-                            <ul>{format_li(soy_sentences)}</ul>
+                        <li><b>콩 (Soybean - {s_dir}):</b>
+                            <ul>{format_li(s_text)}</ul>
                         </li>
                     </ul>
                 </li>
                 <br>
                 <li><b>원유 시장 (개별 품목 분석):</b>
                     <ul>
-                        <li><b>WTI ({get_dir_text(wti_change)}):</b>
-                            <ul>{format_li(oil_wti_sentences)}</ul>
+                        <li><b>WTI ({wti_dir}):</b>
+                            <ul>{format_li(wti_text)}</ul>
                         </li>
-                        <li><b>Brent ({get_dir_text(brent_change)}):</b>
-                            <ul>{format_li(oil_brent_sentences)}</ul>
+                        <li><b>Brent ({brent_dir}):</b>
+                            <ul>{format_li(brent_text)}</ul>
                         </li>
-                        <li><b>Dubai ({get_dir_text(dubai_change)}):</b>
-                            <ul>{format_li(oil_dubai_sentences)}</ul>
+                        <li><b>Dubai ({dubai_dir}):</b>
+                            <ul>{format_li(dubai_text)}</ul>
                         </li>
                     </ul>
                 </li>
@@ -380,7 +421,7 @@ if "selected_date" not in st.session_state:
 if "selected_weekly" not in st.session_state:
   st.session_state.selected_weekly = None
 
-# [KMI 스타일] 사이드바 상단에 Daily / Weekly 전환 버튼 배치 (현재 활성 탭에 파란색 음영 강조)
+# 사이드바 Daily / Weekly 전환 버튼
 st.sidebar.title("📅 리포트 아카이브")
 col1, col2 = st.sidebar.columns(2)
 
