@@ -111,8 +111,8 @@ def parse_html_tables(file_path):
 
 
 def cleanup_and_generate_weekly_reports(directory):
-  """잘못 생성된 10월 20일 주간 파일을 삭제하고, 10월 19일 월요일 기준 주간 리포트 정확히 생성"""
-  # 잘못 생성된 10월 20일 주간 파일 삭제 처리
+  """월요일 기준으로 각 주차별 1주 전, 2주 전 데이터를 정확히 매칭하여 주간 리포트 생성"""
+  # 잘못 생성된 10월 20일 등 불필요한 주간 파일 정리
   wrong_weekly = os.path.join(directory, "Weekly_Report(2026-10-20).html")
   if os.path.exists(wrong_weekly):
     try:
@@ -121,7 +121,7 @@ def cleanup_and_generate_weekly_reports(directory):
       pass
 
   daily_reports = get_available_reports(directory, prefix="Daily_Report")
-  if len(daily_reports) < 10:
+  if len(daily_reports) < 5:
     return
 
   daily_data_map = {}
@@ -143,13 +143,29 @@ def cleanup_and_generate_weekly_reports(directory):
   sorted_mondays = sorted(list(weeks_dict.keys()))
 
   for monday_str in sorted_mondays:
-    # 10월 19일 월요일 기준으로 직전 5영업일(1주전), 그 전 5영업일(2주전) 정확히 분할
-    available_before = [d for d in sorted_dates if d < monday_str]
-    if len(available_before) < 10:
-      continue
+    monday_dt = datetime.strptime(monday_str, "%Y-%m-%d")
 
-    prev_1week_dates = available_before[-5:]  # 1주 전 (예: 10/12 ~ 10/16)
-    prev_2week_dates = available_before[-10:-5]  # 2주 전 (예: 10/05 ~ 10/09)
+    # [핵심 수정] 캘린더 기반으로 1주 전(월~금), 2주 전(월~금) 날짜 범위 동적 계산
+    w1_start = monday_dt - timedelta(days=7)
+    w1_end = monday_dt - timedelta(days=3)
+    w1_start_str = w1_start.strftime("%Y-%m-%d")
+    w1_end_str = w1_end.strftime("%Y-%m-%d")
+
+    w2_start = monday_dt - timedelta(days=14)
+    w2_end = monday_dt - timedelta(days=10)
+    w2_start_str = w2_start.strftime("%Y-%m-%d")
+    w2_end_str = w2_end.strftime("%Y-%m-%d")
+
+    prev_1week_dates = [
+        d for d in sorted_dates if w1_start_str <= d <= w1_end_str
+    ]
+    prev_2week_dates = [
+        d for d in sorted_dates if w2_start_str <= d <= w2_end_str
+    ]
+
+    # 데이터가 충분치 않으면 해당 주간 파일 생성 건너뜀
+    if not prev_1week_dates or not prev_2week_dates:
+      continue
 
     weekly_filename = os.path.join(directory, f"Weekly_Report({monday_str}).html")
 
@@ -162,7 +178,6 @@ def cleanup_and_generate_weekly_reports(directory):
         for d, v in d_map.items():
           all_metrics_data[metric][d] = v
 
-    # 요청된 품목/지표만 추출 (곡물, 원유)
     target_metrics = ["Wheat", "Corn", "Soybean", "WTI", "Brent", "Dubai"]
 
     metrics_results = {}
@@ -194,7 +209,6 @@ def cleanup_and_generate_weekly_reports(directory):
           f"<tr><td>{m}</td><td>{avg_1w_str}</td><td>{avg_2w_str}</td><td>{change_str}</td></tr>"
       )
 
-    # 개별 품목별 변동 방향성에 따른 맞춤형 요약 생성 함수
     def get_dir_text(val):
       return "상승" if val > 0 else ("하락" if val < 0 else "보합")
 
@@ -255,7 +269,7 @@ def cleanup_and_generate_weekly_reports(directory):
       wf.write(weekly_html)
 
 
-# 주간 파일 정리 및 생성 실행
+# 주간 파일 생성 실행
 cleanup_and_generate_weekly_reports(REPORT_DIR)
 
 # 세션 상태 초기화
@@ -274,7 +288,6 @@ is_daily = st.session_state.nav_mode == "Daily"
 is_weekly = st.session_state.nav_mode == "Weekly"
 
 with col1:
-  # 활성화된 탭은 primary(파란색 음영), 비활성화는 secondary
   btn_type_d = "primary" if is_daily else "secondary"
   if st.button("Daily", type=btn_type_d, use_container_width=True):
     st.session_state.nav_mode = "Daily"
@@ -300,8 +313,8 @@ if not reports_dict:
   st.sidebar.warning("등록된 리포트가 없습니다.")
   st.title("📈 시장 브리핑 아카이브")
   st.info(
-      "해당하는 리포트 파일이 없거나, 주간 요약 생성을 위한 2주치(10영업일 이상)"
-      " 일일 리포트가 부족합니다."
+      "해당하는 리포트 파일이 없거나, 주간 요약 생성을 위한 일일 리포트가"
+      " 부족합니다."
   )
 else:
   date_list = list(reports_dict.keys())
@@ -311,12 +324,10 @@ else:
 
   current_key = st.session_state[current_selected_key]
 
-  # 소제목과 높이 정렬을 위한 미세 여백
   st.sidebar.markdown(
       "<div style='margin-top: 10px;'></div>", unsafe_allow_html=True
   )
 
-  # 날짜 버튼 목록 출력
   for date_str in date_list:
     is_selected = date_str == current_key
     btn_type = "primary" if is_selected else "secondary"
@@ -337,7 +348,6 @@ else:
     with open(file_path, "r", encoding="utf-8") as f:
       html_content = f.read()
 
-    # HTML 내부 여백 제거 및 위치 정렬 스타일 주입
     custom_style = (
         "<style>\n body { padding: 0px !important; margin: 0px !important;"
         " background-color: transparent !important; }\n h1 { margin-top: 0px"
@@ -348,7 +358,6 @@ else:
     else:
       html_content = custom_style + html_content
 
-    # 화면에 리포트 렌더링
     components.html(html_content, height=1350, scrolling=True)
 
   except Exception as e:
