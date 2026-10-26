@@ -156,7 +156,7 @@ def parse_daily_commentaries(file_path):
 
 
 def generate_ai_market_summary(item_key, change_val, v1, v2, raw_texts):
-  """Google Gemini API를 활용하여 시황 원문 분석 및 한국어 요약 생성 (동적 모델 탐색 적용)"""
+  """Google Gemini API를 활용하여 시황 원문 분석 및 한국어 요약 생성 (고정 표준 모델 사용으로 속도 개선)"""
   dir_text = "상승" if change_val > 0 else ("하락" if change_val < 0 else "보합")
 
   if not google_api_key:
@@ -194,29 +194,10 @@ def generate_ai_market_summary(item_key, change_val, v1, v2, raw_texts):
 
   ai_summary = ""
   try:
-    # 사용 가능한 모델 목록을 조회하여 generateContent가 지원되는 모델 자동 선택
-    available_models = [
-        m.name
-        for m in genai.list_models()
-        if "generateContent" in m.supported_generation_methods
-    ]
-
-    selected_model_name = None
-    for pref in ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-pro"]:
-      matches = [m for m in available_models if pref in m]
-      if matches:
-        selected_model_name = matches[0]
-        break
-
-    if not selected_model_name and available_models:
-      selected_model_name = available_models[0]
-
-    if selected_model_name:
-      model = genai.GenerativeModel(selected_model_name)
-      response = model.generate_content(prompt)
-      ai_summary = response.text.strip()
-    else:
-      ai_summary = "사용 가능한 Gemini 모델을 찾지 못했습니다."
+    # 지연 시간을 없애기 위해 표준 모델을 직접 호출
+    model = genai.GenerativeModel("gemini-pro")
+    response = model.generate_content(prompt)
+    ai_summary = response.text.strip()
   except Exception as e:
     ai_summary = f"AI 요약 생성 중 오류가 발생했습니다: {e}"
 
