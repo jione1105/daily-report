@@ -2,10 +2,10 @@ import os
 import re
 from datetime import datetime, timedelta
 from bs4 import BeautifulSoup
+import google.generativeai as genai
 import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
-from openai import OpenAI
 
 # 페이지 설정 (와이드 레이아웃)
 st.set_page_config(
@@ -46,9 +46,12 @@ st.markdown(
 # 기준 폴더 경로
 REPORT_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# OpenAI 클라이언트 초기화
-api_key = st.secrets.get("OPENAI_API_KEY", os.environ.get("OPENAI_API_KEY", ""))
-client = OpenAI(api_key=api_key) if api_key else None
+# Google Gemini API 클라이언트 초기화
+google_api_key = st.secrets.get(
+    "GOOGLE_API_KEY", os.environ.get("GOOGLE_API_KEY", "")
+)
+if google_api_key:
+  genai.configure(api_key=google_api_key)
 
 
 def get_available_reports(directory, prefix="Daily_Report"):
@@ -108,7 +111,7 @@ def parse_html_tables(file_path):
 
 
 def parse_daily_commentaries(file_path):
-  """일일 HTML 파일에서 품목별 시황 원문 파싱 (팜유 혼입 방지 및 유종별 분리)"""
+  """일일 HTML 파일에서 품목별 시황 원문 파싱"""
   try:
     with open(file_path, "r", encoding="utf-8") as f:
       soup = BeautifulSoup(f.read(), "html.parser")
@@ -153,11 +156,11 @@ def parse_daily_commentaries(file_path):
 
 
 def generate_ai_market_summary(item_key, change_val, v1, v2, raw_texts):
-  """AI(OpenAI)를 활용하여 5일간의 시황 원문을 분석하고 전문적인 한국어 요약 생성"""
+  """Google Gemini API를 활용하여 시황 원문 분석 및 한국어 요약 생성"""
   dir_text = "상승" if change_val > 0 else ("하락" if change_val < 0 else "보합")
 
-  if not client:
-    return f"2주 전 평균({v2:,.2f}) 대비 1주 전 평균({v1:,.2f})이 <b>{change_val:+.2f}% {dir_text}</b>하였습니다.<br><span style='color:red;'>[알림] OpenAI API 키가 설정되지 않았습니다.</span>"
+  if not google_api_key:
+    return f"2주 전 평균({v2:,.2f}) 대비 1주 전 평균({v1:,.2f})이 <b>{change_val:+.2f}% {dir_text}</b>하였습니다.<br><span style='color:red;'>[알림] GOOGLE_API_KEY가 설정되지 않았습니다.</span>"
 
   filtered_texts = []
   for t in raw_texts:
@@ -190,12 +193,10 @@ def generate_ai_market_summary(item_key, change_val, v1, v2, raw_texts):
   """
 
   try:
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.3,
-    )
-    ai_summary = response.choices[0].message.content.strip()
+    # Gemini 모델 호출 (gemini-1.5-flash 사용)
+    model = genai.GenerativeModel("gemini-1.5-flash")
+    response = model.generate_content(prompt)
+    ai_summary = response.text.strip()
   except Exception as e:
     ai_summary = f"AI 요약 생성 중 오류가 발생했습니다: {e}"
 
@@ -451,9 +452,6 @@ else:
       html_content = custom_style + html_content
 
     components.html(html_content, height=1350, scrolling=True)
-
-  except Exception as e:
-    st.error(f"리포트를 불러오는 중 오류가 발생했습니다: {e}")
 
   except Exception as e:
     st.error(f"리포트를 불러오는 중 오류가 발생했습니다: {e}")
