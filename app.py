@@ -7,12 +7,14 @@ import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
 
+# 페이지 설정 (와이드 레이아웃)
 st.set_page_config(
     page_title="일일 및 주간 리포트 아카이브",
     page_icon="📈",
     layout="wide",
 )
 
+# [CSS 스타일] 사이드바 정렬, 버튼 및 활성 탭 파란색 음영 강조 커스텀
 st.markdown(
     """
     <style>
@@ -30,6 +32,8 @@ st.markdown(
             margin-left: 0rem !important;
             margin-right: 0rem !important;
         }
+        
+        /* 현재 선택된 날짜 버튼 음영 (부드러운 파란색 계열) */
         div.stButton > button[kind="primary"] {
             background-color: #E2EBF5 !important;
             color: #1E3E62 !important;
@@ -41,49 +45,62 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+# 기준 폴더 경로
 REPORT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 def get_available_reports(directory, prefix="Daily_Report"):
+  """특정 파일명 패턴을 가진 HTML 파일들을 스캔하여 날짜별 정렬"""
   reports = {}
   if not os.path.exists(directory):
     return reports
+
   for f in os.listdir(directory):
     if not f.lower().endswith(".html"):
       continue
     if prefix in f:
       match = re.search(r"(\d{4}-\d{2}-\d{2})", f)
       if match:
-        reports[match[1]] = os.path.join(directory, f)
+        date_str = match[1]
+        reports[date_str] = os.path.join(directory, f)
+
   return dict(sorted(reports.items(), key=lambda x: x[0], reverse=True))
 
 
 def parse_html_tables(file_path):
+  """일일 HTML 파일 안의 모든 테이블에서 날짜별 지표 수치를 정밀하게 추출"""
   try:
     with open(file_path, "r", encoding="utf-8") as f:
       soup = BeautifulSoup(f.read(), "html.parser")
 
     tables_data = {}
-    for table in soup.find_all("table"):
+    tables = soup.find_all("table")
+    for table in tables:
       rows = table.find_all("tr")
       if len(rows) < 2:
         continue
+
       headers = [th.get_text(strip=True) for th in rows[0].find_all(["th", "td"])]
       if not headers or "Date" not in headers:
         continue
+
       date_idx = headers.index("Date")
+
       for row in rows[1:]:
         cols = [c.get_text(strip=True) for c in row.find_all(["td", "th"])]
         if len(cols) <= date_idx:
           continue
+
         date_val = cols[date_idx]
         if not re.match(r"^\d{4}-\d{2}-\d{2}$", date_val):
           continue
+
         for i, h in enumerate(headers):
           if i == date_idx or i >= len(cols):
             continue
+          raw_val = cols[i].replace(",", "").replace("$", "")
           try:
-            val = float(cols[i].replace(",", "").replace("$", ""))
+            val = float(raw_val)
             if h not in tables_data:
               tables_data[h] = {}
             tables_data[h][date_val] = val
@@ -94,7 +111,60 @@ def parse_html_tables(file_path):
     return {}
 
 
+def parse_daily_commentaries(file_path):
+  """일일 HTML 파일에서 제공해주신 실제 구조(h3 및 ul/li)를 바탕으로 품목별 시황 문장 파싱"""
+  try:
+    with open(file_path, "r", encoding="utf-8") as f:
+      soup = BeautifulSoup(f.read(), "html.parser")
+
+    commentaries = {}
+    h3_tags = soup.find_all("h3")
+    for h3 in h3_tags:
+      title = h3.get_text(strip=True)
+      key = None
+      if "Wheat" in title:
+        key = "Wheat"
+      elif "Corn" in title:
+        key = "Corn"
+      elif "Soybean" in title:
+        key = "Soybean"
+      elif "Crude Oil" in title or "Oil" in title:
+        key = "Oil"
+
+      if key:
+        sentences = []
+        # h3 다음 형제 태그들을 순회하며 p 또는 li 내부 텍스트 수집
+        curr = h3.find_next_sibling()
+        while curr and curr.name not in ["h2", "h3", "h1"]:
+          for el in curr.find_all(["p", "li"]):
+            txt = el.get_text(strip=True)
+            # 너무 짧거나 메타 정보인 경우 제외하고 실제 시황 문장만 수집
+            if txt and len(txt) > 15 and "Reporting by" not in txt:
+              if txt not in sentences:
+                sentences.append(txt)
+          curr = curr.find_next_sibling()
+
+        if key not in commentaries:
+          commentaries[key] = []
+        commentaries[key].extend(sentences)
+    return commentaries
+  except Exception:
+    return {}
+
+
+def translate_text(text):
+  """영어 문장을 자연스러운 한국어로 번역"""
+  if not text or not text.strip():
+    return text
+  try:
+    translated = GoogleTranslator(source="en", target="ko").translate(text)
+    return translated if translated else text
+  except Exception:
+    return text
+
+
 def cleanup_and_generate_weekly_reports(directory):
+  """월요일 기준 주간 파일 생성: 1주전/2주전 비교 및 실제 시황 원문 파싱·방향성 맞춤 번역"""
   wrong_weekly = os.path.join(directory, "Weekly_Report(2026-10-20).html")
   if os.path.exists(wrong_weekly):
     try:
@@ -107,8 +177,10 @@ def cleanup_and_generate_weekly_reports(directory):
     return
 
   daily_data_map = {}
+  daily_comms_map = {}
   for d_str, f_path in daily_reports.items():
     daily_data_map[d_str] = parse_html_tables(f_path)
+    daily_comms_map[d_str] = parse_daily_commentaries(f_path)
 
   sorted_dates = sorted(list(daily_reports.keys()))
 
@@ -121,7 +193,9 @@ def cleanup_and_generate_weekly_reports(directory):
       weeks_dict[monday_str] = []
     weeks_dict[monday_str].append(d_str)
 
-  for monday_str in sorted(list(weeks_dict.keys())):
+  sorted_mondays = sorted(list(weeks_dict.keys()))
+
+  for monday_str in sorted_mondays:
     monday_dt = datetime.strptime(monday_str, "%Y-%m-%d")
 
     w1_start = (monday_dt - timedelta(days=7)).strftime("%Y-%m-%d")
@@ -179,25 +253,81 @@ def cleanup_and_generate_weekly_reports(directory):
           f"<tr><td>{m}</td><td>{avg_1w_str}</td><td>{avg_2w_str}</td><td>{change_str}</td></tr>"
       )
 
-    # 가격 변동 방향성에 맞춘 동적 시황 생성 (주차별 가격 데이터 기반이므로 주차마다 반드시 내용이 바뀜)
-    def generate_dynamic_summary(item, data):
-      chg = data.get("change", 0)
-      v1 = data.get("avg_1w", 0)
-      v2 = data.get("avg_2w", 0)
-      
-      if chg > 0:
-        return f"2주 전 평균({v2:,.2f}) 대비 1주 전 평균({v1:,.2f})이 <b>{chg:+.2f}% 상승</b>하였습니다. 해당 주간 글로벌 수급 호조 및 매수세 유입으로 인한 상방 압력이 작용했습니다."
-      elif chg < 0:
-        return f"2주 전 평균({v2:,.2f}) 대비 1주 전 평균({v1:,.2f})이 <b>{chg:+.2f}% 하락</b>하였습니다. 해당 주간 수확 압박 및 매물 출회에 따른 하방 압력이 작용했습니다."
+    # 1주 전 5일치 시황 원문 중 가격 변동 방향성(상승/하락)에 맞는 문장 선별 후 한글 번역
+    def get_market_commentary(item_key, change_val):
+      if change_val > 0:
+        trend_kws = [
+            "rose",
+            "gain",
+            "higher",
+            "increase",
+            "up",
+            "rally",
+            "surge",
+            "growth",
+            "higher",
+            "stoked",
+        ]
+        dir_text = "상승"
+      elif change_val < 0:
+        trend_kws = [
+            "fall",
+            "fell",
+            "drop",
+            "lower",
+            "decline",
+            "decrease",
+            "down",
+            "pressure",
+            "slip",
+            "eased",
+        ]
+        dir_text = "하락"
       else:
-        return f"2주 전 평균({v2:,.2f}) 대비 1주 전 평균({v1:,.2f})이 <b>보합세</b>를 기록하였습니다."
+        trend_kws = []
+        dir_text = "보합"
 
-    w_sum = generate_dynamic_summary("Wheat", metrics_results.get("Wheat", {}))
-    c_sum = generate_dynamic_summary("Corn", metrics_results.get("Corn", {}))
-    s_sum = generate_dynamic_summary("Soybean", metrics_results.get("Soybean", {}))
-    wti_sum = generate_dynamic_summary("WTI", metrics_results.get("WTI", {}))
-    brent_sum = generate_dynamic_summary("Brent", metrics_results.get("Brent", {}))
-    dubai_sum = generate_dynamic_summary("Dubai", metrics_results.get("Dubai", {}))
+      lookup_key = "Oil" if item_key in ["WTI", "Brent", "Dubai"] else item_key
+      collected_eng = []
+
+      # 1주 전 5일간의 일일 리포트 시황에서 방향성에 맞는 문장 수집
+      for d_str in prev_1week_dates:
+        comms = daily_comms_map.get(d_str, {}).get(lookup_key, [])
+        for s in comms:
+          s_lower = s.lower()
+          if any(kw in s_lower for kw in trend_kws):
+            if s not in collected_eng:
+              collected_eng.append(s)
+
+      # 키워드 매칭 문장이 없으면 해당 주의 첫 번째 문장 활용
+      if not collected_eng:
+        for d_str in prev_1week_dates:
+          comms = daily_comms_map.get(d_str, {}).get(lookup_key, [])
+          if comms:
+            collected_eng.append(comms[0])
+            break
+
+      # 상위 1개 문장을 한국어로 번역
+      if collected_eng:
+        translated_sentence = translate_text(collected_eng[0])
+      else:
+        translated_sentence = (
+            f"해당 주간 {item_key} 시장은 수급 및 대외 요인에 따라 변동성을"
+            " 나타냈습니다."
+        )
+
+      v1 = metrics_results.get(item_key, {}).get("avg_1w", 0)
+      v2 = metrics_results.get(item_key, {}).get("avg_2w", 0)
+
+      summary_html = f"2주 전 평균({v2:,.2f}) 대비 1주 전 평균({v1:,.2f})이 <b>{change_val:+.2f}% {dir_text}</b>하였습니다.<br><i>[주요 시황 요약] {translated_sentence}</i>"
+      return summary_html
+
+    w_sum = get_market_commentary("Wheat", metrics_results.get("Wheat", {}).get("change", 0))
+    c_sum = get_market_commentary("Corn", metrics_results.get("Corn", {}).get("change", 0))
+    s_sum = get_market_commentary("Soybean", metrics_results.get("Soybean", {}).get("change", 0))
+    wti_sum = get_market_commentary("WTI", metrics_results.get("WTI", {}).get("change", 0))
+    brent_sum = get_market_commentary("Brent", metrics_results.get("Brent", {}).get("change", 0))
+    dubai_sum = get_market_commentary("Dubai", metrics_results.get("Dubai", {}).get("change", 0))
 
     weekly_html = f"""
         <html>
@@ -212,7 +342,7 @@ def cleanup_and_generate_weekly_reports(directory):
                 th {{ background-color: #243642; color: #FFFFFF; padding: 8px; font-size: 13px; }}
                 td {{ padding: 6px 10px; border: 1px solid #D0D0D0; font-size: 13px; }}
                 ul {{ padding-left: 20px; }}
-                li {{ margin-bottom: 8px; }}
+                li {{ margin-bottom: 12px; }}
             </style>
         </head>
         <body>
