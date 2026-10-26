@@ -2,7 +2,7 @@ import os
 import re
 from datetime import datetime, timedelta
 from bs4 import BeautifulSoup
-import google.generativeai as genai
+from deep_translator import GoogleTranslator
 import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
@@ -45,13 +45,6 @@ st.markdown(
 
 # 기준 폴더 경로
 REPORT_DIR = os.path.dirname(os.path.abspath(__file__))
-
-# Google Gemini API 클라이언트 초기화
-google_api_key = st.secrets.get(
-    "GOOGLE_API_KEY", os.environ.get("GOOGLE_API_KEY", "")
-)
-if google_api_key:
-  genai.configure(api_key=google_api_key)
 
 
 def get_available_reports(directory, prefix="Daily_Report"):
@@ -111,7 +104,7 @@ def parse_html_tables(file_path):
 
 
 def parse_daily_commentaries(file_path):
-  """일일 HTML 파일에서 품목별 시황 원문 파싱"""
+  """일일 HTML 파일에서 품목별 시황 원문 파싱 (팜유 혼입 방지)"""
   try:
     with open(file_path, "r", encoding="utf-8") as f:
       soup = BeautifulSoup(f.read(), "html.parser")
@@ -155,58 +148,19 @@ def parse_daily_commentaries(file_path):
     return {}
 
 
-def generate_ai_market_summary(item_key, change_val, v1, v2, raw_texts):
-  """Google Gemini API를 활용하여 시황 원문 분석 및 한국어 요약 생성 (고정 표준 모델 사용으로 속도 개선)"""
-  dir_text = "상승" if change_val > 0 else ("하락" if change_val < 0 else "보합")
-
-  if not google_api_key:
-    return f"2주 전 평균({v2:,.2f}) 대비 1주 전 평균({v1:,.2f})이 <b>{change_val:+.2f}% {dir_text}</b>하였습니다.<br><span style='color:red;'>[알림] GOOGLE_API_KEY가 설정되지 않았습니다.</span>"
-
-  filtered_texts = []
-  for t in raw_texts:
-    t_lower = t.lower()
-    if item_key in ["WTI", "Brent", "Dubai"]:
-      if (
-          item_key.lower() in t_lower
-          or "crude" in t_lower
-          or "oil" in t_lower
-          or "saudi" in t_lower
-      ):
-        filtered_texts.append(t)
-    else:
-      filtered_texts.append(t)
-
-  target_corpus = (
-      "\n".join(filtered_texts[:15]) if filtered_texts else "관련 주요 뉴스 원문 없음"
-  )
-
-  prompt = f"""
-  당신은 글로벌 원자재 및 에너지 시장 전문 수석 애널리스트입니다.
-  다음은 최근 1주일간 수집된 '{item_key}' 품목의 일일 시장 뉴스 원문들입니다:
-  
-  ---
-  {target_corpus}
-  ---
-  
-  이 품목의 주간 평균 가격은 2주 전 평균({v2:,.2f}) 대비 1주 전 평균({v1:,.2f})으로 {change_val:+.2f}% 변화하여 '{dir_text}' 세를 보였습니다.
-  위 뉴스 원문과 가격 변동률을 바탕으로, 이 품목의 주간 가격 변동 핵심 원인과 시장 동향을 전문적인 비즈니스 한국어 톤으로 2~3문장 이내로 명확하게 요약해 주세요. 다른 서두 없이 요약 본문만 작성해 주세요.
-  """
-
-  ai_summary = ""
+def translate_text(text):
+  """영어 문장을 자연스러운 한국어로 번역"""
+  if not text or not text.strip():
+    return text
   try:
-    # 지연 시간을 없애기 위해 표준 모델을 직접 호출
-    model = genai.GenerativeModel("gemini-pro")
-    response = model.generate_content(prompt)
-    ai_summary = response.text.strip()
-  except Exception as e:
-    ai_summary = f"AI 요약 생성 중 오류가 발생했습니다: {e}"
-
-  summary_html = f"2주 전 평균({v2:,.2f}) 대비 1주 전 평균({v1:,.2f})이 <b>{change_val:+.2f}% {dir_text}</b>하였습니다.<br><span style='color: #444; font-size: 13px; display: block; margin-top: 5px;'><b>[AI 애널리스트 시황 요약]</b> {ai_summary}</span>"
-  return summary_html
+    translated = GoogleTranslator(source="en", target="ko").translate(text)
+    return translated if translated else text
+  except Exception:
+    return text
 
 
 def cleanup_and_generate_weekly_reports(directory):
-  """월요일 기준 주간 파일 자동 생성"""
+  """월요일 기준 주간 파일 자동 생성 (5일간의 시황 원문 수집 및 번역)"""
   wrong_weekly = os.path.join(directory, "Weekly_Report(2026-10-20).html")
   if os.path.exists(wrong_weekly):
     try:
@@ -291,28 +245,104 @@ def cleanup_and_generate_weekly_reports(directory):
       avg_1w_str = f"{avg_1w:,.2f}" if avg_1w else "-"
       table_rows_html += f"<tr><td>{m}</td><td>{avg_1w_str}</td><td>{avg_2w_str}</td><td>{change_str}</td></tr>"
 
-    def build_summary_for_item(item_key):
-      res = metrics_results.get(item_key, {"change": 0, "avg_1w": 0, "avg_2w": 0})
-      chg = res["change"]
-      v1 = res["avg_1w"]
-      v2 = res["avg_2w"]
+    def get_aggregated_market_commentary(item_key, change_val):
+      if change_val > 0:
+        trend_kws = [
+            "rose",
+            "gain",
+            "higher",
+            "increase",
+            "up",
+            "rally",
+            "surge",
+            "growth",
+            "stoked",
+            "highest",
+        ]
+        dir_text = "상승"
+      elif change_val < 0:
+        trend_kws = [
+            "fall",
+            "fell",
+            "drop",
+            "lower",
+            "decline",
+            "decrease",
+            "down",
+            "pressure",
+            "slip",
+            "eased",
+        ]
+        dir_text = "하락"
+      else:
+        trend_kws = []
+        dir_text = "보합"
 
       lookup_key = (
           "CrudeOil" if item_key in ["WTI", "Brent", "Dubai"] else item_key
       )
-      raw_pool = []
+      collected_sentences = []
+
       for d_str in prev_1week_dates:
         comms = daily_comms_map.get(d_str, {}).get(lookup_key, [])
-        raw_pool.extend(comms)
+        for s in comms:
+          s_lower = s.lower()
+          if item_key == "WTI" and not (
+              "wti" in s_lower or "west texas" in s_lower or "clc1" in s_lower
+          ):
+            continue
+          if item_key == "Brent" and not (
+              "brent" in s_lower or "lcoc1" in s_lower
+          ):
+            continue
+          if item_key == "Dubai" and not (
+              "dubai" in s_lower
+              or "middle east" in s_lower
+              or "saudi" in s_lower
+          ):
+            continue
 
-      return generate_ai_market_summary(item_key, chg, v1, v2, raw_pool)
+          if any(kw in s_lower for kw in trend_kws):
+            if s not in collected_sentences:
+              collected_sentences.append(s)
 
-    w_sum = build_summary_for_item("Wheat")
-    c_sum = build_summary_for_item("Corn")
-    s_sum = build_summary_for_item("Soybean")
-    wti_sum = build_summary_for_item("WTI")
-    brent_sum = build_summary_for_item("Brent")
-    dubai_sum = build_summary_for_item("Dubai")
+      if not collected_sentences and lookup_key == "CrudeOil":
+        for d_str in prev_1week_dates:
+          comms = daily_comms_map.get(d_str, {}).get(lookup_key, [])
+          for s in comms:
+            if s not in collected_sentences:
+              collected_sentences.append(s)
+
+      if not collected_sentences:
+        for d_str in prev_1week_dates:
+          comms = daily_comms_map.get(d_str, {}).get(lookup_key, [])
+          if comms and comms[0] not in collected_sentences:
+            collected_sentences.append(comms[0])
+
+      translated_bullets = []
+      for eng_s in collected_sentences[:2]:
+        ko_s = translate_text(eng_s)
+        if ko_s:
+          translated_bullets.append(f"<li>{ko_s}</li>")
+
+      if not translated_bullets:
+        translated_bullets.append(
+            f"<li>해당 주간 {item_key} 시장은 수급 및 대외 요인에 따라 변동성을"
+            " 나타냈습니다.</li>"
+        )
+
+      v1 = metrics_results.get(item_key, {}).get("avg_1w", 0)
+      v2 = metrics_results.get(item_key, {}).get("avg_2w", 0)
+
+      summary_html = f"2주 전 평균({v2:,.2f}) 대비 1주 전 평균({v1:,.2f})이 <b>{change_val:+.2f}% {dir_text}</b>하였습니다.<br><span style='color: #444; font-size: 13px; display: block; margin-top: 5px;'><b>[주간 주요 동향 및 요인]</b><ul style='margin: 5px 0 0 15px; padding-left: 0;'>{''.join(translated_bullets)}</ul></span>"
+      return summary_html
+
+    w_sum = get_aggregated_market_commentary("Wheat", metrics_results.get("Wheat", {}).get("change", 0))
+    c_sum = get_aggregated_market_commentary("Corn", metrics_results.get("Corn", {}).get("change", 0))
+    s_sum = get_aggregated_market_commentary("Soybean", metrics_results.get("Soybean", {}).get("change", 0))
+    wti_sum = get_aggregated_market_commentary("WTI", metrics_results.get("WTI", {}).get("change", 0))
+    brent_sum = get_aggregated_market_commentary("Brent", metrics_results.get("Brent", {}).get("change", 0))
+    dubai_sum = get_aggregated_market_commentary("Dubai", metrics_results.get("Dubai", {}).get("change", 0))
 
     weekly_html = f"""
         <html>
