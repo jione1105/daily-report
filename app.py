@@ -112,7 +112,7 @@ def parse_html_tables(file_path):
 
 
 def parse_daily_commentaries(file_path):
-  """일일 HTML 파일에서 품목별 시황 문장들을 파싱하여 추출"""
+  """일일 HTML 파일에서 품목별 시황 문장들을 정확하게 파싱하여 추출 (팜유 혼입 방지)"""
   try:
     with open(file_path, "r", encoding="utf-8") as f:
       soup = BeautifulSoup(f.read(), "html.parser")
@@ -128,8 +128,8 @@ def parse_daily_commentaries(file_path):
         key = "Corn"
       elif "Soybean" in title:
         key = "Soybean"
-      elif "Crude Oil" in title or "Oil" in title:
-        key = "Oil"
+      elif "Crude Oil" in title:  # 정확히 Crude Oil만 타겟팅하여 Vegetable Oil(팜유) 배제
+        key = "CrudeOil"
 
       if key:
         sentences = []
@@ -169,7 +169,7 @@ def translate_text(text):
 
 
 def cleanup_and_generate_weekly_reports(directory):
-  """월요일 기준 주간 파일 생성: 1주전 5일치 시황 문장들을 종합하여 번역"""
+  """월요일 기준 주간 파일 생성: 1주전 5일치 시황을 날짜별로 골고루 수집하여 종합 번역"""
   wrong_weekly = os.path.join(directory, "Weekly_Report(2026-10-20).html")
   if os.path.exists(wrong_weekly):
     try:
@@ -258,7 +258,7 @@ def cleanup_and_generate_weekly_reports(directory):
           f"<tr><td>{m}</td><td>{avg_1w_str}</td><td>{avg_2w_str}</td><td>{change_str}</td></tr>"
       )
 
-    # [핵심] 1주 전 5일치 시황 문장들을 전부 모아서 방향성에 맞는 핵심 요인들을 종합 추출
+    # [핵심 개선] 1주 전 5일치 시황을 날짜별로 순회하며 유종별/품목별 맞춤 문장을 골고루 수집 및 종합 번역
     def get_aggregated_market_commentary(item_key, change_val):
       if change_val > 0:
         trend_kws = [
@@ -271,6 +271,7 @@ def cleanup_and_generate_weekly_reports(directory):
             "surge",
             "growth",
             "stoked",
+            "highest",
         ]
         dir_text = "상승"
       elif change_val < 0:
@@ -291,27 +292,56 @@ def cleanup_and_generate_weekly_reports(directory):
         trend_kws = []
         dir_text = "보합"
 
-      lookup_key = "Oil" if item_key in ["WTI", "Brent", "Dubai"] else item_key
+      # 원유인 경우 'CrudeOil' 파서 키움, 곡물은 각 품목명 사용
+      lookup_key = (
+          "CrudeOil"
+          if item_key in ["WTI", "Brent", "Dubai"]
+          else item_key
+      )
       collected_sentences = []
 
-      # 1주 전 5일치 파일들을 전부 순회하며 방향성과 일치하는 문장들을 누적 수집
+      # 5일간의 일일 리포트를 날짜별로 순회하며 각 날짜별로 알맞은 시황 문장 수집
       for d_str in prev_1week_dates:
         comms = daily_comms_map.get(d_str, {}).get(lookup_key, [])
         for s in comms:
           s_lower = s.lower()
+
+          # 유종별(WTI, Brent, Dubai) 세부 키워드 필터링 적용 (원유 품목 간 차별화)
+          if item_key == "WTI" and not (
+              "wti" in s_lower or "west texas" in s_lower or "clc1" in s_lower
+          ):
+            continue
+          if item_key == "Brent" and not (
+              "brent" in s_lower or "lcoc1" in s_lower
+          ):
+            continue
+          if item_key == "Dubai" and not (
+              "dubai" in s_lower
+              or "middle east" in s_lower
+              or "saudi" in s_lower
+          ):
+            continue
+
           if any(kw in s_lower for kw in trend_kws):
             if s not in collected_sentences:
               collected_sentences.append(s)
 
-      # 키워드 매칭 문장이 부족하면 해당 5일치에서 의미 있는 문장들을 추가로 확보
-      if len(collected_sentences) < 2:
+      # 만약 유종별 세부 키워드 매칭이 너무 엄격해서 부족하면 일반 CrudeOil 시황 문장도 허용
+      if not collected_sentences and lookup_key == "CrudeOil":
         for d_str in prev_1week_dates:
           comms = daily_comms_map.get(d_str, {}).get(lookup_key, [])
           for s in comms:
             if s not in collected_sentences:
               collected_sentences.append(s)
 
-      # 상위 최대 2개의 핵심 문장을 각각 한국어로 번역하여 종합
+      # 여전히 부족하면 해당 품목 전체에서 추출
+      if not collected_sentences:
+        for d_str in prev_1week_dates:
+          comms = daily_comms_map.get(d_str, {}).get(lookup_key, [])
+          if comms and comms[0] not in collected_sentences:
+            collected_sentences.append(comms[0])
+
+      # 상위 최대 2개의 핵심 문장을 한국어로 번역하여 리스트업
       translated_bullets = []
       for eng_s in collected_sentences[:2]:
         ko_s = translate_text(eng_s)
@@ -320,8 +350,8 @@ def cleanup_and_generate_weekly_reports(directory):
 
       if not translated_bullets:
         translated_bullets.append(
-            f"<li>해당 주간 {item_key} 시장은 수급 및 대외 요인에 따라 복합적인"
-            " 변동성을 나타냈습니다.</li>"
+            f"<li>해당 주간 {item_key} 시장은 수급 및 대외 요인에 따라 변동성을"
+            " 나타냈습니다.</li>"
         )
 
       v1 = metrics_results.get(item_key, {}).get("avg_1w", 0)
