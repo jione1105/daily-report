@@ -159,7 +159,6 @@ def generate_ai_market_summary(item_key, change_val, v1, v2, raw_texts):
   if not client:
     return f"2주 전 평균({v2:,.2f}) 대비 1주 전 평균({v1:,.2f})이 <b>{change_val:+.2f}% {dir_text}</b>하였습니다.<br><span style='color:red;'>[알림] OpenAI API 키가 설정되지 않았습니다.</span>"
 
-  # 해당 품목과 관련된 텍스트 필터링
   filtered_texts = []
   for t in raw_texts:
     t_lower = t.lower()
@@ -174,7 +173,9 @@ def generate_ai_market_summary(item_key, change_val, v1, v2, raw_texts):
     else:
       filtered_texts.append(t)
 
-  target_corpus = "\n".join(filtered_texts[:15]) if filtered_texts else "관련 주요 뉴스 원문 없음"
+  target_corpus = (
+      "\n".join(filtered_texts[:15]) if filtered_texts else "관련 주요 뉴스 원문 없음"
+  )
 
   prompt = f"""
   당신은 글로벌 원자재 및 에너지 시장 전문 수석 애널리스트입니다.
@@ -271,9 +272,15 @@ def cleanup_and_generate_weekly_reports(directory):
 
       if avg_2w and avg_1w and avg_2w != 0:
         pct_change = ((avg_1w - avg_2w) / avg_2w) * 100
-        color = "red" if pct_change > 0 else ("blue" if pct_change < 0 else "black")
+        color = (
+            "red" if pct_change > 0 else ("blue" if pct_change < 0 else "black")
+        )
         change_str = f"<span style='color:{color}; font-weight:bold;'>{pct_change:+.2f}%</span>"
-        metrics_results[m] = {"change": pct_change, "avg_1w": avg_1w, "avg_2w": avg_2w}
+        metrics_results[m] = {
+            "change": pct_change,
+            "avg_1w": avg_1w,
+            "avg_2w": avg_2w,
+        }
       else:
         change_str = "-"
         metrics_results[m] = {"change": 0, "avg_1w": 0, "avg_2w": 0}
@@ -282,14 +289,15 @@ def cleanup_and_generate_weekly_reports(directory):
       avg_1w_str = f"{avg_1w:,.2f}" if avg_1w else "-"
       table_rows_html += f"<tr><td>{m}</td><td>{avg_1w_str}</td><td>{avg_2w_str}</td><td>{change_str}</td></tr>"
 
-    # 1주 전 5일치 원문을 모아서 AI 요약 생성 함수에 전달
     def build_summary_for_item(item_key):
       res = metrics_results.get(item_key, {"change": 0, "avg_1w": 0, "avg_2w": 0})
       chg = res["change"]
       v1 = res["avg_1w"]
       v2 = res["avg_2w"]
 
-      lookup_key = "CrudeOil" if item_key in ["WTI", "Brent", "Dubai"] else item_key
+      lookup_key = (
+          "CrudeOil" if item_key in ["WTI", "Brent", "Dubai"] else item_key
+      )
       raw_pool = []
       for d_str in prev_1week_dates:
         comms = daily_comms_map.get(d_str, {}).get(lookup_key, [])
@@ -371,12 +379,20 @@ is_daily = st.session_state.nav_mode == "Daily"
 is_weekly = st.session_state.nav_mode == "Weekly"
 
 with col1:
-  if st.button("Daily", type="primary" if is_daily else "secondary", use_container_width=True):
+  if st.button(
+      "Daily",
+      type="primary" if is_daily else "secondary",
+      use_container_width=True,
+  ):
     st.session_state.nav_mode = "Daily"
     st.rerun()
 
 with col2:
-  if st.button("Weekly", type="primary" if is_weekly else "secondary", use_container_width=True):
+  if st.button(
+      "Weekly",
+      type="primary" if is_weekly else "secondary",
+      use_container_width=True,
+  ):
     st.session_state.nav_mode = "Weekly"
     st.rerun()
 
@@ -392,7 +408,10 @@ else:
 if not reports_dict:
   st.sidebar.warning("등록된 리포트가 없습니다.")
   st.title("📈 시장 브리핑 아카이브")
-  st.info("해당하는 리포트 파일이 없거나, 주간 요약 생성을 위한 일일 리포트가 부족합니다.")
+  st.info(
+      "해당하는 리포트 파일이 없거나, 주간 요약 생성을 위한 일일 리포트가"
+      " 부족합니다."
+  )
 else:
   date_list = list(reports_dict.keys())
 
@@ -401,7 +420,9 @@ else:
 
   current_key = st.session_state[current_selected_key]
 
-  st.sidebar.markdown("<div style='margin-top: 10px;'></div>", unsafe_allow_html=True)
+  st.sidebar.markdown(
+      "<div style='margin-top: 10px;'></div>", unsafe_allow_html=True
+  )
 
   for date_str in date_list:
     if st.sidebar.button(
@@ -416,7 +437,7 @@ else:
   file_path = reports_dict[current_key]
 
   try:
-    with open(file_path, "r", encoding="utf-8) as f:
+    with open(file_path, "r", encoding="utf-8") as f:
       html_content = f.read()
 
     custom_style = (
@@ -430,6 +451,9 @@ else:
       html_content = custom_style + html_content
 
     components.html(html_content, height=1350, scrolling=True)
+
+  except Exception as e:
+    st.error(f"리포트를 불러오는 중 오류가 발생했습니다: {e}")
 
   except Exception as e:
     st.error(f"리포트를 불러오는 중 오류가 발생했습니다: {e}")
