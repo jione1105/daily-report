@@ -245,45 +245,14 @@ def cleanup_and_generate_weekly_reports(directory):
       avg_1w_str = f"{avg_1w:,.2f}" if avg_1w else "-"
       table_rows_html += f"<tr><td>{m}</td><td>{avg_1w_str}</td><td>{avg_2w_str}</td><td>{change_str}</td></tr>"
 
-    def get_price_driven_market_commentary(item_key, change_val):
-      if change_val > 0:
-        trend_kws = [
-            "rose",
-            "gain",
-            "higher",
-            "increase",
-            "up",
-            "rally",
-            "surge",
-            "growth",
-            "stoked",
-            "highest",
-        ]
-        dir_text = "상승"
-      elif change_val < 0:
-        trend_kws = [
-            "fall",
-            "fell",
-            "drop",
-            "lower",
-            "decline",
-            "decrease",
-            "down",
-            "pressure",
-            "slip",
-            "eased",
-        ]
-        dir_text = "하락"
-      else:
-        trend_kws = []
-        dir_text = "보합"
-
+    def get_dispersed_market_commentary(item_key, change_val):
+      dir_text = "상승" if change_val > 0 else ("하락" if change_val < 0 else "보합")
       lookup_key = (
           "CrudeOil" if item_key in ["WTI", "Brent", "Dubai"] else item_key
       )
-      matched_sentences = []
 
-      # 1주 전 5일치 일일 리포트 원문을 모두 순회하며 등락 방향성 키워드가 포함된 알맹이 원인 문장 추출
+      # [개선] 5일치 일일 리포트를 날짜별로 순회하며 각 날짜마다 최소 1개씩 문장을 골고루 수집
+      dispersed_sentences = []
       for d_str in prev_1week_dates:
         comms = daily_comms_map.get(d_str, {}).get(lookup_key, [])
         for s in comms:
@@ -304,20 +273,21 @@ def cleanup_and_generate_weekly_reports(directory):
           ):
             continue
 
-          if any(kw in s_lower for kw in trend_kws):
-            if s not in matched_sentences:
-              matched_sentences.append(s)
+          # 해당 날짜에서 조건에 맞는 첫 번째 문장을 확보하면 즉시 채택하고 다음 날짜로 넘어감 (날짜별 골고루 분산)
+          if s not in dispersed_sentences:
+            dispersed_sentences.append(s)
+            break
 
-      # 매칭된 문장이 없다면 일반 시황 문장 중 첫 번째 것을 활용
-      if not matched_sentences:
+      # 만약 유종별 필터가 너무 엄격했다면 일반 시황 문장이라도 날짜별로 골고루 수집
+      if not dispersed_sentences:
         for d_str in prev_1week_dates:
           comms = daily_comms_map.get(d_str, {}).get(lookup_key, [])
-          if comms and comms[0] not in matched_sentences:
-            matched_sentences.append(comms[0])
+          if comms:
+            dispersed_sentences.append(comms[0])
 
-      # 추출된 핵심 원인 문장들을 한국어로 번역하여 최대 2개(약 2줄 분량)로 구성
+      # 수집된 날짜별 문장들 중 최대 2개를 한국어로 번역하여 자연스럽게 조합
       translated_lines = []
-      for eng_s in matched_sentences[:2]:
+      for eng_s in dispersed_sentences[:2]:
         ko_s = translate_text(eng_s)
         if ko_s:
           translated_lines.append(ko_s)
@@ -333,15 +303,15 @@ def cleanup_and_generate_weekly_reports(directory):
       v1 = metrics_results.get(item_key, {}).get("avg_1w", 0)
       v2 = metrics_results.get(item_key, {}).get("avg_2w", 0)
 
-      summary_html = f"2주 전 평균({v2:,.2f}) 대비 1주 전 평균({v1:,.2f})이 <b>{change_val:+.2f}% {dir_text}</b>하였습니다.<br><span style='color: #444; font-size: 13px; display: block; margin-top: 4px;'><b>[변동 원인 요약]</b> {summary_text}</span>"
+      summary_html = f"2주 전 평균({v2:,.2f}) 대비 1주 전 평균({v1:,.2f})이 <b>{change_val:+.2f}% {dir_text}</b>하였습니다.<br><span style='color: #444; font-size: 13px; display: block; margin-top: 4px;'><b>[주간 동향 및 원인 요약]</b> {summary_text}</span>"
       return summary_html
 
-    w_sum = get_price_driven_market_commentary("Wheat", metrics_results.get("Wheat", {}).get("change", 0))
-    c_sum = get_price_driven_market_commentary("Corn", metrics_results.get("Corn", {}).get("change", 0))
-    s_sum = get_price_driven_market_commentary("Soybean", metrics_results.get("Soybean", {}).get("change", 0))
-    wti_sum = get_price_driven_market_commentary("WTI", metrics_results.get("WTI", {}).get("change", 0))
-    brent_sum = get_price_driven_market_commentary("Brent", metrics_results.get("Brent", {}).get("change", 0))
-    dubai_sum = get_price_driven_market_commentary("Dubai", metrics_results.get("Dubai", {}).get("change", 0))
+    w_sum = get_dispersed_market_commentary("Wheat", metrics_results.get("Wheat", {}).get("change", 0))
+    c_sum = get_dispersed_market_commentary("Corn", metrics_results.get("Corn", {}).get("change", 0))
+    s_sum = get_dispersed_market_commentary("Soybean", metrics_results.get("Soybean", {}).get("change", 0))
+    wti_sum = get_dispersed_market_commentary("WTI", metrics_results.get("WTI", {}).get("change", 0))
+    brent_sum = get_dispersed_market_commentary("Brent", metrics_results.get("Brent", {}).get("change", 0))
+    dubai_sum = get_dispersed_market_commentary("Dubai", metrics_results.get("Dubai", {}).get("change", 0))
 
     weekly_html = f"""
         <html>
