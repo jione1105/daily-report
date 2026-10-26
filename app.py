@@ -110,9 +110,45 @@ def parse_html_tables(file_path):
     return {}
 
 
+def parse_commentary_content(file_path):
+  """일일 HTML 파일에서 각 품목별 시황(Commentary) 문장들을 파싱하여 추출"""
+  try:
+    with open(file_path, "r", encoding="utf-8") as f:
+      soup = BeautifulSoup(f.read(), "html.parser")
+
+    commentaries = {}
+    h3_tags = soup.find_all("h3")
+    for h3 in h3_tags:
+      title = h3.get_text(strip=True)
+      # 품목 매칭 키워드 설정
+      key = None
+      if "Wheat" in title:
+        key = "Wheat"
+      elif "Corn" in title:
+        key = "Corn"
+      elif "Soybean" in title:
+        key = "Soybean"
+      elif "Crude Oil" in title or "Oil" in title:
+        key = "Oil"
+
+      if key:
+        sentences = []
+        # h3 다음 형제 요소들 중 ul 또는 p 태그 안의 텍스트 수집
+        curr = h3.find_next_sibling()
+        while curr and curr.name not in ["h2", "h3", "h1"]:
+          for li in curr.find_all(["li", "p"]):
+            txt = li.get_text(strip=True)
+            if txt and len(txt) > 10:
+              sentences.append(txt)
+          curr = curr.find_next_sibling()
+        commentaries[key] = sentences
+    return commentaries
+  except Exception:
+    return {}
+
+
 def cleanup_and_generate_weekly_reports(directory):
-  """월요일 기준으로 각 주차별 1주 전, 2주 전 데이터를 정확히 매칭하여 주간 리포트 생성"""
-  # 잘못 생성된 10월 20일 등 불필요한 주간 파일 정리
+  """월요일 기준으로 각 주차별 1주 전/2주 전 데이터 비교 및 실제 시황 문장 동적 추출하여 주간 리포트 생성"""
   wrong_weekly = os.path.join(directory, "Weekly_Report(2026-10-20).html")
   if os.path.exists(wrong_weekly):
     try:
@@ -125,12 +161,13 @@ def cleanup_and_generate_weekly_reports(directory):
     return
 
   daily_data_map = {}
+  daily_commentary_map = {}
   for d_str, f_path in daily_reports.items():
     daily_data_map[d_str] = parse_html_tables(f_path)
+    daily_commentary_map[d_str] = parse_commentary_content(f_path)
 
   sorted_dates = sorted(list(daily_reports.keys()))
 
-  # 월요일 기준으로 주 단위 그룹화
   weeks_dict = {}
   for d_str in sorted_dates:
     dt = datetime.strptime(d_str, "%Y-%m-%d")
@@ -145,7 +182,6 @@ def cleanup_and_generate_weekly_reports(directory):
   for monday_str in sorted_mondays:
     monday_dt = datetime.strptime(monday_str, "%Y-%m-%d")
 
-    # [핵심 수정] 캘린더 기반으로 1주 전(월~금), 2주 전(월~금) 날짜 범위 동적 계산
     w1_start = monday_dt - timedelta(days=7)
     w1_end = monday_dt - timedelta(days=3)
     w1_start_str = w1_start.strftime("%Y-%m-%d")
@@ -163,7 +199,6 @@ def cleanup_and_generate_weekly_reports(directory):
         d for d in sorted_dates if w2_start_str <= d <= w2_end_str
     ]
 
-    # 데이터가 충분치 않으면 해당 주간 파일 생성 건너뜀
     if not prev_1week_dates or not prev_2week_dates:
       continue
 
@@ -209,16 +244,67 @@ def cleanup_and_generate_weekly_reports(directory):
           f"<tr><td>{m}</td><td>{avg_1w_str}</td><td>{avg_2w_str}</td><td>{change_str}</td></tr>"
       )
 
+    # [핵심] 1주 전 기간의 일일 파일들에서 실제 시황 문장을 수집하여 방향성에 맞게 추출
+    def extract_trend_sentences(item_key, change_val):
+      trend_word = (
+          "lower"
+          if change_val < 0
+          else ("higher" if change_val > 0 else "steady")
+      )
+      collected = []
+      for d_str in prev_1week_dates:
+        comms = daily_commentary_map.get(d_str, {})
+        sentences = comms.get(item_key, [])
+        for s in sentences:
+          # 가격 변동 방향성(상승/하락 관련 단어)이 포함된 문장 우선 추출
+          s_lower = s.lower()
+          if (
+              trend_word in s_lower
+              or "fall" in s_lower
+              or "drop" in s_lower
+              or "rose" in s_lower
+              or "gain" in s_lower
+              or "pressure" in s_lower
+          ):
+            if s not in collected:
+              collected.append(s)
+      if not collected:
+        # 매칭되는 문장이 없으면 해당 주의 첫 번째 문장 활용
+        for d_str in prev_1week_dates:
+          comms = daily_commentary_map.get(d_str, {})
+          sentences = comms.get(item_key, [])
+          if sentences:
+            collected.append(sentences[0])
+            break
+      return (
+          collected[:2]
+          if collected
+          else [
+              f"해당 주간 {item_key} 품목의 특이 가격 변동 요인이 관측되었습니다."
+          ]
+      )
+
     def get_dir_text(val):
       return "상승" if val > 0 else ("하락" if val < 0 else "보합")
 
-    wheat_dir = get_dir_text(metrics_results.get("Wheat", {}).get("change", 0))
-    corn_dir = get_dir_text(metrics_results.get("Corn", {}).get("change", 0))
-    soy_dir = get_dir_text(metrics_results.get("Soybean", {}).get("change", 0))
+    w_change = metrics_results.get("Wheat", {}).get("change", 0)
+    c_change = metrics_results.get("Corn", {}).get("change", 0)
+    s_change = metrics_results.get("Soybean", {}).get("change", 0)
 
-    wti_dir = get_dir_text(metrics_results.get("WTI", {}).get("change", 0))
-    brent_dir = get_dir_text(metrics_results.get("Brent", {}).get("change", 0))
-    dubai_dir = get_dir_text(metrics_results.get("Dubai", {}).get("change", 0))
+    wti_change = metrics_results.get("WTI", {}).get("change", 0)
+    brent_change = metrics_results.get("Brent", {}).get("change", 0)
+    dubai_change = metrics_results.get("Dubai", {}).get("change", 0)
+
+    wheat_sentences = extract_trend_sentences("Wheat", w_change)
+    corn_sentences = extract_trend_sentences("Corn", c_change)
+    soy_sentences = extract_trend_sentences("Soybean", s_change)
+
+    oil_wti_sentences = extract_trend_sentences("Oil", wti_change)
+    oil_brent_sentences = extract_trend_sentences("Oil", brent_change)
+    oil_dubai_sentences = extract_trend_sentences("Oil", dubai_change)
+
+    def format_li(sentences):
+      return "".join([f"<li>{s}</li>" for s in sentences])
 
     weekly_html = f"""
         <html>
@@ -232,6 +318,8 @@ def cleanup_and_generate_weekly_reports(directory):
                 table {{ margin: 15px auto; border-collapse: collapse; width: 95%; text-align: center; }}
                 th {{ background-color: #243642; color: #FFFFFF; padding: 8px; font-size: 13px; }}
                 td {{ padding: 6px 10px; border: 1px solid #D0D0D0; font-size: 13px; }}
+                ul {{ padding-left: 20px; }}
+                li {{ margin-bottom: 8px; }}
             </style>
         </head>
         <body>
@@ -248,17 +336,29 @@ def cleanup_and_generate_weekly_reports(directory):
             <ul>
                 <li><b>곡물 시장 (개별 품목 분석):</b>
                     <ul>
-                        <li><b>밀 (Wheat):</b> 2주 전 대비 1주 전 평균 가격이 <b>{wheat_dir}</b>하였습니다. (미국 겨울밀 파종 진행 상황 및 흑해 지역 수출 동향이 반영됨)</li>
-                        <li><b>옥수수 (Corn):</b> 2주 전 대비 1주 전 평균 가격이 <b>{corn_dir}</b>하였습니다. (미국 중서부 건조 날씨에 따른 수확 가속화 및 수출 수요 변화가 작용함)</li>
-                        <li><b>콩 (Soybean):</b> 2주 전 대비 1주 전 평균 가격이 <b>{soy_dir}</b>하였습니다. (신곡 수확 압박 및 주요국(중국) 수입 수요 증감에 따라 변동성이 나타남)</li>
+                        <li><b>밀 (Wheat - {get_dir_text(w_change)}):</b>
+                            <ul>{format_li(wheat_sentences)}</ul>
+                        </li>
+                        <li><b>옥수수 (Corn - {get_dir_text(c_change)}):</b>
+                            <ul>{format_li(corn_sentences)}</ul>
+                        </li>
+                        <li><b>콩 (Soybean - {get_dir_text(s_change)}):</b>
+                            <ul>{format_li(soy_sentences)}</ul>
+                        </li>
                     </ul>
                 </li>
                 <br>
                 <li><b>원유 시장 (개별 품목 분석):</b>
                     <ul>
-                        <li><b>WTI:</b> 2주 전 대비 1주 전 평균 가격이 <b>{wti_dir}</b>하였습니다. (미국 원유 선물 만기 앞둔 수급 및 재고 이슈가 연동됨)</li>
-                        <li><b>Brent:</b> 2주 전 대비 1주 전 평균 가격이 <b>{brent_dir}</b>하였습니다. (글로벌 해상 수송 및 지정학적 공급 차질 우려가 반영됨)</li>
-                        <li><b>Dubai:</b> 2주 전 대비 1주 전 평균 가격이 <b>{dubai_dir}</b>하였습니다. (아시아 현물 시장의 수급 및 산유국 공식판매가격(OSP) 추이가 작용함)</li>
+                        <li><b>WTI ({get_dir_text(wti_change)}):</b>
+                            <ul>{format_li(oil_wti_sentences)}</ul>
+                        </li>
+                        <li><b>Brent ({get_dir_text(brent_change)}):</b>
+                            <ul>{format_li(oil_brent_sentences)}</ul>
+                        </li>
+                        <li><b>Dubai ({get_dir_text(dubai_change)}):</b>
+                            <ul>{format_li(oil_dubai_sentences)}</ul>
+                        </li>
                     </ul>
                 </li>
             </ul>
