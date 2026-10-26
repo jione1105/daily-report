@@ -1,4 +1,4 @@
 streamlit
 pandas
 beautifulsoup4
-deep-translator
+openai
