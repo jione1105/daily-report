@@ -156,7 +156,7 @@ def parse_daily_commentaries(file_path):
 
 
 def generate_ai_market_summary(item_key, change_val, v1, v2, raw_texts):
-  """Google Gemini API를 활용하여 시황 원문 분석 및 한국어 요약 생성"""
+  """Google Gemini API를 활용하여 시황 원문 분석 및 한국어 요약 생성 (동적 모델 탐색 적용)"""
   dir_text = "상승" if change_val > 0 else ("하락" if change_val < 0 else "보합")
 
   if not google_api_key:
@@ -192,11 +192,31 @@ def generate_ai_market_summary(item_key, change_val, v1, v2, raw_texts):
   위 뉴스 원문과 가격 변동률을 바탕으로, 이 품목의 주간 가격 변동 핵심 원인과 시장 동향을 전문적인 비즈니스 한국어 톤으로 2~3문장 이내로 명확하게 요약해 주세요. 다른 서두 없이 요약 본문만 작성해 주세요.
   """
 
+  ai_summary = ""
   try:
-    # [수정] 표준 모델명 'gemini-pro'로 변경
-    model = genai.GenerativeModel("gemini-pro")
-    response = model.generate_content(prompt)
-    ai_summary = response.text.strip()
+    # 사용 가능한 모델 목록을 조회하여 generateContent가 지원되는 모델 자동 선택
+    available_models = [
+        m.name
+        for m in genai.list_models()
+        if "generateContent" in m.supported_generation_methods
+    ]
+
+    selected_model_name = None
+    for pref in ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-pro"]:
+      matches = [m for m in available_models if pref in m]
+      if matches:
+        selected_model_name = matches[0]
+        break
+
+    if not selected_model_name and available_models:
+      selected_model_name = available_models[0]
+
+    if selected_model_name:
+      model = genai.GenerativeModel(selected_model_name)
+      response = model.generate_content(prompt)
+      ai_summary = response.text.strip()
+    else:
+      ai_summary = "사용 가능한 Gemini 모델을 찾지 못했습니다."
   except Exception as e:
     ai_summary = f"AI 요약 생성 중 오류가 발생했습니다: {e}"
 
