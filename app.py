@@ -2,10 +2,10 @@ import os
 import re
 from datetime import datetime, timedelta
 from bs4 import BeautifulSoup
-from deep_translator import GoogleTranslator
 import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
+from openai import OpenAI
 
 # 페이지 설정 (와이드 레이아웃)
 st.set_page_config(
@@ -14,7 +14,7 @@ st.set_page_config(
     layout="wide",
 )
 
-# [CSS 스타일] 사이드바 정렬, 버튼 및 활성 탭 파란색 음영 강조 커스텀
+# [CSS 스타일] 사이드바 정렬 및 탭 디자인 커스텀
 st.markdown(
     """
     <style>
@@ -32,8 +32,6 @@ st.markdown(
             margin-left: 0rem !important;
             margin-right: 0rem !important;
         }
-        
-        /* 현재 선택된 날짜 버튼 음영 (부드러운 파란색 계열) */
         div.stButton > button[kind="primary"] {
             background-color: #E2EBF5 !important;
             color: #1E3E62 !important;
@@ -47,6 +45,10 @@ st.markdown(
 
 # 기준 폴더 경로
 REPORT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# OpenAI 클라이언트 초기화
+api_key = st.secrets.get("OPENAI_API_KEY", os.environ.get("OPENAI_API_KEY", ""))
+client = OpenAI(api_key=api_key) if api_key else None
 
 
 def get_available_reports(directory, prefix="Daily_Report"):
@@ -68,39 +70,33 @@ def get_available_reports(directory, prefix="Daily_Report"):
 
 
 def parse_html_tables(file_path):
-  """일일 HTML 파일 안의 모든 테이블에서 날짜별 지표 수치를 정밀하게 추출"""
+  """일일 HTML 파일 안의 테이블에서 지표 수치 추출"""
   try:
     with open(file_path, "r", encoding="utf-8") as f:
       soup = BeautifulSoup(f.read(), "html.parser")
 
     tables_data = {}
-    tables = soup.find_all("table")
-    for table in tables:
+    for table in soup.find_all("table"):
       rows = table.find_all("tr")
       if len(rows) < 2:
         continue
-
       headers = [th.get_text(strip=True) for th in rows[0].find_all(["th", "td"])]
       if not headers or "Date" not in headers:
         continue
-
       date_idx = headers.index("Date")
 
       for row in rows[1:]:
         cols = [c.get_text(strip=True) for c in row.find_all(["td", "th"])]
         if len(cols) <= date_idx:
           continue
-
         date_val = cols[date_idx]
         if not re.match(r"^\d{4}-\d{2}-\d{2}$", date_val):
           continue
-
         for i, h in enumerate(headers):
           if i == date_idx or i >= len(cols):
             continue
-          raw_val = cols[i].replace(",", "").replace("$", "")
           try:
-            val = float(raw_val)
+            val = float(cols[i].replace(",", "").replace("$", ""))
             if h not in tables_data:
               tables_data[h] = {}
             tables_data[h][date_val] = val
@@ -112,14 +108,13 @@ def parse_html_tables(file_path):
 
 
 def parse_daily_commentaries(file_path):
-  """일일 HTML 파일에서 품목별 시황 문장들을 정확하게 파싱하여 추출 (팜유 혼입 방지)"""
+  """일일 HTML 파일에서 품목별 시황 원문 파싱 (팜유 혼입 방지 및 유종별 분리)"""
   try:
     with open(file_path, "r", encoding="utf-8") as f:
       soup = BeautifulSoup(f.read(), "html.parser")
 
     commentaries = {}
-    h3_tags = soup.find_all("h3")
-    for h3 in h3_tags:
+    for h3 in soup.find_all("h3"):
       title = h3.get_text(strip=True)
       key = None
       if "Wheat" in title:
@@ -128,7 +123,7 @@ def parse_daily_commentaries(file_path):
         key = "Corn"
       elif "Soybean" in title:
         key = "Soybean"
-      elif "Crude Oil" in title:  # 정확히 Crude Oil만 타겟팅하여 Vegetable Oil(팜유) 배제
+      elif "Crude Oil" in title:
         key = "CrudeOil"
 
       if key:
@@ -157,19 +152,58 @@ def parse_daily_commentaries(file_path):
     return {}
 
 
-def translate_text(text):
-  """영어 문장을 자연스러운 한국어로 번역"""
-  if not text or not text.strip():
-    return text
+def generate_ai_market_summary(item_key, change_val, v1, v2, raw_texts):
+  """AI(OpenAI)를 활용하여 5일간의 시황 원문을 분석하고 전문적인 한국어 요약 생성"""
+  dir_text = "상승" if change_val > 0 else ("하락" if change_val < 0 else "보합")
+
+  if not client:
+    return f"2주 전 평균({v2:,.2f}) 대비 1주 전 평균({v1:,.2f})이 <b>{change_val:+.2f}% {dir_text}</b>하였습니다.<br><span style='color:red;'>[알림] OpenAI API 키가 설정되지 않았습니다.</span>"
+
+  # 해당 품목과 관련된 텍스트 필터링
+  filtered_texts = []
+  for t in raw_texts:
+    t_lower = t.lower()
+    if item_key in ["WTI", "Brent", "Dubai"]:
+      if (
+          item_key.lower() in t_lower
+          or "crude" in t_lower
+          or "oil" in t_lower
+          or "saudi" in t_lower
+      ):
+        filtered_texts.append(t)
+    else:
+      filtered_texts.append(t)
+
+  target_corpus = "\n".join(filtered_texts[:15]) if filtered_texts else "관련 주요 뉴스 원문 없음"
+
+  prompt = f"""
+  당신은 글로벌 원자재 및 에너지 시장 전문 수석 애널리스트입니다.
+  다음은 최근 1주일간 수집된 '{item_key}' 품목의 일일 시장 뉴스 원문들입니다:
+  
+  ---
+  {target_corpus}
+  ---
+  
+  이 품목의 주간 평균 가격은 2주 전 평균({v2:,.2f}) 대비 1주 전 평균({v1:,.2f})으로 {change_val:+.2f}% 변화하여 '{dir_text}' 세를 보였습니다.
+  위 뉴스 원문과 가격 변동률을 바탕으로, 이 품목의 주간 가격 변동 핵심 원인과 시장 동향을 전문적인 비즈니스 한국어 톤으로 2~3문장 이내로 명확하게 요약해 주세요. 다른 서두 없이 요약 본문만 작성해 주세요.
+  """
+
   try:
-    translated = GoogleTranslator(source="en", target="ko").translate(text)
-    return translated if translated else text
-  except Exception:
-    return text
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.3,
+    )
+    ai_summary = response.choices[0].message.content.strip()
+  except Exception as e:
+    ai_summary = f"AI 요약 생성 중 오류가 발생했습니다: {e}"
+
+  summary_html = f"2주 전 평균({v2:,.2f}) 대비 1주 전 평균({v1:,.2f})이 <b>{change_val:+.2f}% {dir_text}</b>하였습니다.<br><span style='color: #444; font-size: 13px; display: block; margin-top: 5px;'><b>[AI 애널리스트 시황 요약]</b> {ai_summary}</span>"
+  return summary_html
 
 
 def cleanup_and_generate_weekly_reports(directory):
-  """월요일 기준 주간 파일 생성: 1주전 5일치 시황을 날짜별로 골고루 수집하여 종합 번역"""
+  """월요일 기준 주간 파일 자동 생성"""
   wrong_weekly = os.path.join(directory, "Weekly_Report(2026-10-20).html")
   if os.path.exists(wrong_weekly):
     try:
@@ -198,9 +232,7 @@ def cleanup_and_generate_weekly_reports(directory):
       weeks_dict[monday_str] = []
     weeks_dict[monday_str].append(d_str)
 
-  sorted_mondays = sorted(list(weeks_dict.keys()))
-
-  for monday_str in sorted_mondays:
+  for monday_str in sorted(list(weeks_dict.keys())):
     monday_dt = datetime.strptime(monday_str, "%Y-%m-%d")
 
     w1_start = (monday_dt - timedelta(days=7)).strftime("%Y-%m-%d")
@@ -208,12 +240,8 @@ def cleanup_and_generate_weekly_reports(directory):
     w2_start = (monday_dt - timedelta(days=14)).strftime("%Y-%m-%d")
     w2_end = (monday_dt - timedelta(days=10)).strftime("%Y-%m-%d")
 
-    prev_1week_dates = [
-        d for d in sorted_dates if w1_start <= d <= w1_end
-    ]
-    prev_2week_dates = [
-        d for d in sorted_dates if w2_start <= d <= w2_end
-    ]
+    prev_1week_dates = [d for d in sorted_dates if w1_start <= d <= w1_end]
+    prev_2week_dates = [d for d in sorted_dates if w2_start <= d <= w2_end]
 
     if not prev_1week_dates or not prev_2week_dates:
       continue
@@ -243,9 +271,7 @@ def cleanup_and_generate_weekly_reports(directory):
 
       if avg_2w and avg_1w and avg_2w != 0:
         pct_change = ((avg_1w - avg_2w) / avg_2w) * 100
-        color = (
-            "red" if pct_change > 0 else ("blue" if pct_change < 0 else "black")
-        )
+        color = "red" if pct_change > 0 else ("blue" if pct_change < 0 else "black")
         change_str = f"<span style='color:{color}; font-weight:bold;'>{pct_change:+.2f}%</span>"
         metrics_results[m] = {"change": pct_change, "avg_1w": avg_1w, "avg_2w": avg_2w}
       else:
@@ -254,118 +280,29 @@ def cleanup_and_generate_weekly_reports(directory):
 
       avg_2w_str = f"{avg_2w:,.2f}" if avg_2w else "-"
       avg_1w_str = f"{avg_1w:,.2f}" if avg_1w else "-"
-      table_rows_html += (
-          f"<tr><td>{m}</td><td>{avg_1w_str}</td><td>{avg_2w_str}</td><td>{change_str}</td></tr>"
-      )
+      table_rows_html += f"<tr><td>{m}</td><td>{avg_1w_str}</td><td>{avg_2w_str}</td><td>{change_str}</td></tr>"
 
-    # [핵심 개선] 1주 전 5일치 시황을 날짜별로 순회하며 유종별/품목별 맞춤 문장을 골고루 수집 및 종합 번역
-    def get_aggregated_market_commentary(item_key, change_val):
-      if change_val > 0:
-        trend_kws = [
-            "rose",
-            "gain",
-            "higher",
-            "increase",
-            "up",
-            "rally",
-            "surge",
-            "growth",
-            "stoked",
-            "highest",
-        ]
-        dir_text = "상승"
-      elif change_val < 0:
-        trend_kws = [
-            "fall",
-            "fell",
-            "drop",
-            "lower",
-            "decline",
-            "decrease",
-            "down",
-            "pressure",
-            "slip",
-            "eased",
-        ]
-        dir_text = "하락"
-      else:
-        trend_kws = []
-        dir_text = "보합"
+    # 1주 전 5일치 원문을 모아서 AI 요약 생성 함수에 전달
+    def build_summary_for_item(item_key):
+      res = metrics_results.get(item_key, {"change": 0, "avg_1w": 0, "avg_2w": 0})
+      chg = res["change"]
+      v1 = res["avg_1w"]
+      v2 = res["avg_2w"]
 
-      # 원유인 경우 'CrudeOil' 파서 키움, 곡물은 각 품목명 사용
-      lookup_key = (
-          "CrudeOil"
-          if item_key in ["WTI", "Brent", "Dubai"]
-          else item_key
-      )
-      collected_sentences = []
-
-      # 5일간의 일일 리포트를 날짜별로 순회하며 각 날짜별로 알맞은 시황 문장 수집
+      lookup_key = "CrudeOil" if item_key in ["WTI", "Brent", "Dubai"] else item_key
+      raw_pool = []
       for d_str in prev_1week_dates:
         comms = daily_comms_map.get(d_str, {}).get(lookup_key, [])
-        for s in comms:
-          s_lower = s.lower()
+        raw_pool.extend(comms)
 
-          # 유종별(WTI, Brent, Dubai) 세부 키워드 필터링 적용 (원유 품목 간 차별화)
-          if item_key == "WTI" and not (
-              "wti" in s_lower or "west texas" in s_lower or "clc1" in s_lower
-          ):
-            continue
-          if item_key == "Brent" and not (
-              "brent" in s_lower or "lcoc1" in s_lower
-          ):
-            continue
-          if item_key == "Dubai" and not (
-              "dubai" in s_lower
-              or "middle east" in s_lower
-              or "saudi" in s_lower
-          ):
-            continue
+      return generate_ai_market_summary(item_key, chg, v1, v2, raw_pool)
 
-          if any(kw in s_lower for kw in trend_kws):
-            if s not in collected_sentences:
-              collected_sentences.append(s)
-
-      # 만약 유종별 세부 키워드 매칭이 너무 엄격해서 부족하면 일반 CrudeOil 시황 문장도 허용
-      if not collected_sentences and lookup_key == "CrudeOil":
-        for d_str in prev_1week_dates:
-          comms = daily_comms_map.get(d_str, {}).get(lookup_key, [])
-          for s in comms:
-            if s not in collected_sentences:
-              collected_sentences.append(s)
-
-      # 여전히 부족하면 해당 품목 전체에서 추출
-      if not collected_sentences:
-        for d_str in prev_1week_dates:
-          comms = daily_comms_map.get(d_str, {}).get(lookup_key, [])
-          if comms and comms[0] not in collected_sentences:
-            collected_sentences.append(comms[0])
-
-      # 상위 최대 2개의 핵심 문장을 한국어로 번역하여 리스트업
-      translated_bullets = []
-      for eng_s in collected_sentences[:2]:
-        ko_s = translate_text(eng_s)
-        if ko_s:
-          translated_bullets.append(f"<li>{ko_s}</li>")
-
-      if not translated_bullets:
-        translated_bullets.append(
-            f"<li>해당 주간 {item_key} 시장은 수급 및 대외 요인에 따라 변동성을"
-            " 나타냈습니다.</li>"
-        )
-
-      v1 = metrics_results.get(item_key, {}).get("avg_1w", 0)
-      v2 = metrics_results.get(item_key, {}).get("avg_2w", 0)
-
-      summary_html = f"2주 전 평균({v2:,.2f}) 대비 1주 전 평균({v1:,.2f})이 <b>{change_val:+.2f}% {dir_text}</b>하였습니다.<br><span style='color: #444; font-size: 13px; display: block; margin-top: 5px;'><b>[주간 주요 동향 및 요인]</b><ul style='margin: 5px 0 0 15px; padding-left: 0;'>{''.join(translated_bullets)}</ul></span>"
-      return summary_html
-
-    w_sum = get_aggregated_market_commentary("Wheat", metrics_results.get("Wheat", {}).get("change", 0))
-    c_sum = get_aggregated_market_commentary("Corn", metrics_results.get("Corn", {}).get("change", 0))
-    s_sum = get_aggregated_market_commentary("Soybean", metrics_results.get("Soybean", {}).get("change", 0))
-    wti_sum = get_aggregated_market_commentary("WTI", metrics_results.get("WTI", {}).get("change", 0))
-    brent_sum = get_aggregated_market_commentary("Brent", metrics_results.get("Brent", {}).get("change", 0))
-    dubai_sum = get_aggregated_market_commentary("Dubai", metrics_results.get("Dubai", {}).get("change", 0))
+    w_sum = build_summary_for_item("Wheat")
+    c_sum = build_summary_for_item("Corn")
+    s_sum = build_summary_for_item("Soybean")
+    wti_sum = build_summary_for_item("WTI")
+    brent_sum = build_summary_for_item("Brent")
+    dubai_sum = build_summary_for_item("Dubai")
 
     weekly_html = f"""
         <html>
@@ -434,20 +371,12 @@ is_daily = st.session_state.nav_mode == "Daily"
 is_weekly = st.session_state.nav_mode == "Weekly"
 
 with col1:
-  if st.button(
-      "Daily",
-      type="primary" if is_daily else "secondary",
-      use_container_width=True,
-  ):
+  if st.button("Daily", type="primary" if is_daily else "secondary", use_container_width=True):
     st.session_state.nav_mode = "Daily"
     st.rerun()
 
 with col2:
-  if st.button(
-      "Weekly",
-      type="primary" if is_weekly else "secondary",
-      use_container_width=True,
-  ):
+  if st.button("Weekly", type="primary" if is_weekly else "secondary", use_container_width=True):
     st.session_state.nav_mode = "Weekly"
     st.rerun()
 
@@ -463,10 +392,7 @@ else:
 if not reports_dict:
   st.sidebar.warning("등록된 리포트가 없습니다.")
   st.title("📈 시장 브리핑 아카이브")
-  st.info(
-      "해당하는 리포트 파일이 없거나, 주간 요약 생성을 위한 일일 리포트가"
-      " 부족합니다."
-  )
+  st.info("해당하는 리포트 파일이 없거나, 주간 요약 생성을 위한 일일 리포트가 부족합니다.")
 else:
   date_list = list(reports_dict.keys())
 
@@ -475,9 +401,7 @@ else:
 
   current_key = st.session_state[current_selected_key]
 
-  st.sidebar.markdown(
-      "<div style='margin-top: 10px;'></div>", unsafe_allow_html=True
-  )
+  st.sidebar.markdown("<div style='margin-top: 10px;'></div>", unsafe_allow_html=True)
 
   for date_str in date_list:
     if st.sidebar.button(
@@ -492,7 +416,7 @@ else:
   file_path = reports_dict[current_key]
 
   try:
-    with open(file_path, "r", encoding="utf-8") as f:
+    with open(file_path, "r", encoding="utf-8) as f:
       html_content = f.read()
 
     custom_style = (
