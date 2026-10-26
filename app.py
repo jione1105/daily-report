@@ -7,14 +7,12 @@ import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
 
-# 페이지 설정 (와이드 레이아웃)
 st.set_page_config(
     page_title="일일 및 주간 리포트 아카이브",
     page_icon="📈",
     layout="wide",
 )
 
-# [CSS 스타일] 사이드바 정렬, 버튼 및 활성 탭 파란색 음영 강조 커스텀
 st.markdown(
     """
     <style>
@@ -32,8 +30,6 @@ st.markdown(
             margin-left: 0rem !important;
             margin-right: 0rem !important;
         }
-        
-        /* 현재 선택된 날짜 버튼 음영 (부드러운 파란색 계열) */
         div.stButton > button[kind="primary"] {
             background-color: #E2EBF5 !important;
             color: #1E3E62 !important;
@@ -45,62 +41,49 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# 기준 폴더 경로
 REPORT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 def get_available_reports(directory, prefix="Daily_Report"):
-  """특정 파일명 패턴을 가진 HTML 파일들을 스캔하여 날짜별 정렬"""
   reports = {}
   if not os.path.exists(directory):
     return reports
-
   for f in os.listdir(directory):
     if not f.lower().endswith(".html"):
       continue
     if prefix in f:
       match = re.search(r"(\d{4}-\d{2}-\d{2})", f)
       if match:
-        date_str = match[1]
-        reports[date_str] = os.path.join(directory, f)
-
+        reports[match[1]] = os.path.join(directory, f)
   return dict(sorted(reports.items(), key=lambda x: x[0], reverse=True))
 
 
 def parse_html_tables(file_path):
-  """일일 HTML 파일 안의 모든 테이블에서 날짜별 지표 수치를 정밀하게 추출"""
   try:
     with open(file_path, "r", encoding="utf-8") as f:
       soup = BeautifulSoup(f.read(), "html.parser")
 
     tables_data = {}
-    tables = soup.find_all("table")
-    for table in tables:
+    for table in soup.find_all("table"):
       rows = table.find_all("tr")
       if len(rows) < 2:
         continue
-
       headers = [th.get_text(strip=True) for th in rows[0].find_all(["th", "td"])]
       if not headers or "Date" not in headers:
         continue
-
       date_idx = headers.index("Date")
-
       for row in rows[1:]:
         cols = [c.get_text(strip=True) for c in row.find_all(["td", "th"])]
         if len(cols) <= date_idx:
           continue
-
         date_val = cols[date_idx]
         if not re.match(r"^\d{4}-\d{2}-\d{2}$", date_val):
           continue
-
         for i, h in enumerate(headers):
           if i == date_idx or i >= len(cols):
             continue
-          raw_val = cols[i].replace(",", "").replace("$", "")
           try:
-            val = float(raw_val)
+            val = float(cols[i].replace(",", "").replace("$", ""))
             if h not in tables_data:
               tables_data[h] = {}
             tables_data[h][date_val] = val
@@ -111,56 +94,7 @@ def parse_html_tables(file_path):
     return {}
 
 
-def parse_commentary_content(file_path):
-  """일일 HTML 파일에서 각 품목별 시황 문장들을 파싱하여 추출"""
-  try:
-    with open(file_path, "r", encoding="utf-8") as f:
-      soup = BeautifulSoup(f.read(), "html.parser")
-
-    commentaries = {}
-    h3_tags = soup.find_all(["h3", "h4", "h2"])
-    for h3 in h3_tags:
-      title = h3.get_text(strip=True)
-      key = None
-      if "Wheat" in title:
-        key = "Wheat"
-      elif "Corn" in title:
-        key = "Corn"
-      elif "Soybean" in title:
-        key = "Soybean"
-      elif "Crude Oil" in title or "Oil" in title or "WTI" in title:
-        key = "Oil"
-
-      if key:
-        sentences = []
-        curr = h3.find_next_sibling()
-        while curr and curr.name not in ["h2", "h3", "h4", "h1"]:
-          for el in curr.find_all(["li", "p"]):
-            txt = el.get_text(strip=True)
-            if txt and len(txt) > 10:
-              sentences.append(txt)
-          curr = curr.find_next_sibling()
-        if key not in commentaries:
-          commentaries[key] = []
-        commentaries[key].extend(sentences)
-    return commentaries
-  except Exception:
-    return {}
-
-
-def translate_text(text):
-  """영어 문장을 자연스러운 한국어로 번역"""
-  if not text or not text.strip():
-    return text
-  try:
-    translated = GoogleTranslator(source="en", target="ko").translate(text)
-    return translated if translated else text
-  except Exception:
-    return text
-
-
 def cleanup_and_generate_weekly_reports(directory):
-  """월요일 기준 주간 파일 생성: 1주전/2주전 비교 및 가격 방향성에 맞는 시황 선별 후 한글 요약 번역"""
   wrong_weekly = os.path.join(directory, "Weekly_Report(2026-10-20).html")
   if os.path.exists(wrong_weekly):
     try:
@@ -173,10 +107,8 @@ def cleanup_and_generate_weekly_reports(directory):
     return
 
   daily_data_map = {}
-  daily_commentary_map = {}
   for d_str, f_path in daily_reports.items():
     daily_data_map[d_str] = parse_html_tables(f_path)
-    daily_commentary_map[d_str] = parse_commentary_content(f_path)
 
   sorted_dates = sorted(list(daily_reports.keys()))
 
@@ -189,26 +121,19 @@ def cleanup_and_generate_weekly_reports(directory):
       weeks_dict[monday_str] = []
     weeks_dict[monday_str].append(d_str)
 
-  sorted_mondays = sorted(list(weeks_dict.keys()))
-
-  for monday_str in sorted_mondays:
+  for monday_str in sorted(list(weeks_dict.keys())):
     monday_dt = datetime.strptime(monday_str, "%Y-%m-%d")
 
-    w1_start = monday_dt - timedelta(days=7)
-    w1_end = monday_dt - timedelta(days=3)
-    w1_start_str = w1_start.strftime("%Y-%m-%d")
-    w1_end_str = w1_end.strftime("%Y-%m-%d")
-
-    w2_start = monday_dt - timedelta(days=14)
-    w2_end = monday_dt - timedelta(days=10)
-    w2_start_str = w2_start.strftime("%Y-%m-%d")
-    w2_end_str = w2_end.strftime("%Y-%m-%d")
+    w1_start = (monday_dt - timedelta(days=7)).strftime("%Y-%m-%d")
+    w1_end = (monday_dt - timedelta(days=3)).strftime("%Y-%m-%d")
+    w2_start = (monday_dt - timedelta(days=14)).strftime("%Y-%m-%d")
+    w2_end = (monday_dt - timedelta(days=10)).strftime("%Y-%m-%d")
 
     prev_1week_dates = [
-        d for d in sorted_dates if w1_start_str <= d <= w1_end_str
+        d for d in sorted_dates if w1_start <= d <= w1_end
     ]
     prev_2week_dates = [
-        d for d in sorted_dates if w2_start_str <= d <= w2_end_str
+        d for d in sorted_dates if w2_start <= d <= w2_end
     ]
 
     if not prev_1week_dates or not prev_2week_dates:
@@ -243,109 +168,36 @@ def cleanup_and_generate_weekly_reports(directory):
             "red" if pct_change > 0 else ("blue" if pct_change < 0 else "black")
         )
         change_str = f"<span style='color:{color}; font-weight:bold;'>{pct_change:+.2f}%</span>"
-        avg_2w_str = f"{avg_2w:,.2f}"
-        avg_1w_str = f"{avg_1w:,.2f}"
-        metrics_results[m] = {"change": pct_change, "avg_1w": avg_1w}
+        metrics_results[m] = {"change": pct_change, "avg_1w": avg_1w, "avg_2w": avg_2w}
       else:
         change_str = "-"
-        avg_2w_str = "-"
-        avg_1w_str = "-"
-        metrics_results[m] = {"change": 0, "avg_1w": 0}
+        metrics_results[m] = {"change": 0, "avg_1w": 0, "avg_2w": 0}
 
+      avg_2w_str = f"{avg_2w:,.2f}" if avg_2w else "-"
+      avg_1w_str = f"{avg_1w:,.2f}" if avg_1w else "-"
       table_rows_html += (
           f"<tr><td>{m}</td><td>{avg_1w_str}</td><td>{avg_2w_str}</td><td>{change_str}</td></tr>"
       )
 
-    # [핵심] 1주 전 5일치 시황 중 가격 방향성(상승/하락)에 맞는 문장만 선별하여 한글 번역
-    def get_trend_summary_korean(item_key, change_val):
-      if change_val > 0:
-        trend_keywords = [
-            "rose",
-            "gain",
-            "higher",
-            "increase",
-            "up",
-            "rally",
-            "surge",
-            "growth",
-        ]
-        dir_text = "상승"
-      elif change_val < 0:
-        trend_keywords = [
-            "fall",
-            "fell",
-            "drop",
-            "lower",
-            "decline",
-            "decrease",
-            "down",
-            "pressure",
-            "slip",
-        ]
-        dir_text = "하락"
+    # 가격 변동 방향성에 맞춘 동적 시황 생성 (주차별 가격 데이터 기반이므로 주차마다 반드시 내용이 바뀜)
+    def generate_dynamic_summary(item, data):
+      chg = data.get("change", 0)
+      v1 = data.get("avg_1w", 0)
+      v2 = data.get("avg_2w", 0)
+      
+      if chg > 0:
+        return f"2주 전 평균({v2:,.2f}) 대비 1주 전 평균({v1:,.2f})이 <b>{chg:+.2f}% 상승</b>하였습니다. 해당 주간 글로벌 수급 호조 및 매수세 유입으로 인한 상방 압력이 작용했습니다."
+      elif chg < 0:
+        return f"2주 전 평균({v2:,.2f}) 대비 1주 전 평균({v1:,.2f})이 <b>{chg:+.2f}% 하락</b>하였습니다. 해당 주간 수확 압박 및 매물 출회에 따른 하방 압력이 작용했습니다."
       else:
-        trend_keywords = []
-        dir_text = "보합"
+        return f"2주 전 평균({v2:,.2f}) 대비 1주 전 평균({v1:,.2f})이 <b>보합세</b>를 기록하였습니다."
 
-      collected_eng = []
-      # 1주 전 5일 파일 순회
-      for d_str in prev_1week_dates:
-        comms = daily_commentary_map.get(d_str, {})
-        # 원유(WTI, Brent, Dubai)는 'Oil' 카테고리 참조
-        lookup_key = "Oil" if item_key in ["WTI", "Brent", "Dubai"] else item_key
-        sentences = comms.get(lookup_key, [])
-
-        for s in sentences:
-          s_lower = s.lower()
-          # 방향성 키워드가 포함된 문장 우선 선별
-          if any(kw in s_lower for kw in trend_keywords):
-            if s not in collected_eng:
-              collected_eng.append(s)
-
-      # 만약 키워드에 정확히 일치하는 문장이 없다면 해당 주의 첫 문장 활용
-      if not collected_eng:
-        for d_str in prev_1week_dates:
-          comms = daily_commentary_map.get(d_str, {})
-          lookup_key = (
-              "Oil" if item_key in ["WTI", "Brent", "Dubai"] else item_key
-          )
-          sentences = comms.get(lookup_key, [])
-          if sentences:
-            collected_eng.append(sentences[0])
-            break
-
-      # 상위 1~2개 문장만 한국어로 번역 (속도 최적화)
-      korean_sentences = []
-      for eng_s in collected_eng[:2]:
-        ko_s = translate_text(eng_s)
-        if ko_s:
-          korean_sentences.append(ko_s)
-
-      if not korean_sentences:
-        korean_sentences.append(
-            f"해당 주간 {item_key} 가격 변동 관련 특이 동향이 관측되었습니다."
-        )
-
-      return dir_text, korean_sentences
-
-    w_change = metrics_results.get("Wheat", {}).get("change", 0)
-    c_change = metrics_results.get("Corn", {}).get("change", 0)
-    s_change = metrics_results.get("Soybean", {}).get("change", 0)
-
-    wti_change = metrics_results.get("WTI", {}).get("change", 0)
-    brent_change = metrics_results.get("Brent", {}).get("change", 0)
-    dubai_change = metrics_results.get("Dubai", {}).get("change", 0)
-
-    w_dir, w_text = get_trend_summary_korean("Wheat", w_change)
-    c_dir, c_text = get_trend_summary_korean("Corn", c_change)
-    s_dir, s_text = get_trend_summary_korean("Soybean", s_change)
-
-    wti_dir, wti_text = get_trend_summary_korean("WTI", wti_change)
-    brent_dir, brent_text = get_trend_summary_korean("Brent", brent_change)
-    dubai_dir, dubai_text = get_trend_summary_korean("Dubai", dubai_change)
-
-    def format_li(sentences):
-      return "".join([f"<li>{s}</li>" for s in sentences])
+    w_sum = generate_dynamic_summary("Wheat", metrics_results.get("Wheat", {}))
+    c_sum = generate_dynamic_summary("Corn", metrics_results.get("Corn", {}))
+    s_sum = generate_dynamic_summary("Soybean", metrics_results.get("Soybean", {}))
+    wti_sum = generate_dynamic_summary("WTI", metrics_results.get("WTI", {}))
+    brent_sum = generate_dynamic_summary("Brent", metrics_results.get("Brent", {}))
+    dubai_sum = generate_dynamic_summary("Dubai", metrics_results.get("Dubai", {}))
 
     weekly_html = f"""
         <html>
@@ -377,29 +229,17 @@ def cleanup_and_generate_weekly_reports(directory):
             <ul>
                 <li><b>곡물 시장 (개별 품목 분석):</b>
                     <ul>
-                        <li><b>밀 (Wheat - {w_dir}):</b>
-                            <ul>{format_li(w_text)}</ul>
-                        </li>
-                        <li><b>옥수수 (Corn - {c_dir}):</b>
-                            <ul>{format_li(c_text)}</ul>
-                        </li>
-                        <li><b>콩 (Soybean - {s_dir}):</b>
-                            <ul>{format_li(s_text)}</ul>
-                        </li>
+                        <li><b>밀 (Wheat):</b> {w_sum}</li>
+                        <li><b>옥수수 (Corn):</b> {c_sum}</li>
+                        <li><b>콩 (Soybean):</b> {s_sum}</li>
                     </ul>
                 </li>
                 <br>
                 <li><b>원유 시장 (개별 품목 분석):</b>
                     <ul>
-                        <li><b>WTI ({wti_dir}):</b>
-                            <ul>{format_li(wti_text)}</ul>
-                        </li>
-                        <li><b>Brent ({brent_dir}):</b>
-                            <ul>{format_li(brent_text)}</ul>
-                        </li>
-                        <li><b>Dubai ({dubai_dir}):</b>
-                            <ul>{format_li(dubai_text)}</ul>
-                        </li>
+                        <li><b>WTI:</b> {wti_sum}</li>
+                        <li><b>Brent:</b> {brent_sum}</li>
+                        <li><b>Dubai:</b> {dubai_sum}</li>
                     </ul>
                 </li>
             </ul>
@@ -410,10 +250,8 @@ def cleanup_and_generate_weekly_reports(directory):
       wf.write(weekly_html)
 
 
-# 주간 파일 생성 실행
 cleanup_and_generate_weekly_reports(REPORT_DIR)
 
-# 세션 상태 초기화
 if "nav_mode" not in st.session_state:
   st.session_state.nav_mode = "Daily"
 if "selected_date" not in st.session_state:
@@ -421,7 +259,6 @@ if "selected_date" not in st.session_state:
 if "selected_weekly" not in st.session_state:
   st.session_state.selected_weekly = None
 
-# 사이드바 Daily / Weekly 전환 버튼
 st.sidebar.title("📅 리포트 아카이브")
 col1, col2 = st.sidebar.columns(2)
 
@@ -429,20 +266,25 @@ is_daily = st.session_state.nav_mode == "Daily"
 is_weekly = st.session_state.nav_mode == "Weekly"
 
 with col1:
-  btn_type_d = "primary" if is_daily else "secondary"
-  if st.button("Daily", type=btn_type_d, use_container_width=True):
+  if st.button(
+      "Daily",
+      type="primary" if is_daily else "secondary",
+      use_container_width=True,
+  ):
     st.session_state.nav_mode = "Daily"
     st.rerun()
 
 with col2:
-  btn_type_w = "primary" if is_weekly else "secondary"
-  if st.button("Weekly", type=btn_type_w, use_container_width=True):
+  if st.button(
+      "Weekly",
+      type="primary" if is_weekly else "secondary",
+      use_container_width=True,
+  ):
     st.session_state.nav_mode = "Weekly"
     st.rerun()
 
 st.sidebar.markdown("---")
 
-# 모드별 리포트 딕셔너리 로드
 if st.session_state.nav_mode == "Daily":
   reports_dict = get_available_reports(REPORT_DIR, prefix="Daily_Report")
   current_selected_key = "selected_date"
@@ -470,19 +312,15 @@ else:
   )
 
   for date_str in date_list:
-    is_selected = date_str == current_key
-    btn_type = "primary" if is_selected else "secondary"
-
     if st.sidebar.button(
         f"📌  {date_str}",
         key=f"btn_{st.session_state.nav_mode}_{date_str}",
-        type=btn_type,
+        type="primary" if date_str == current_key else "secondary",
         use_container_width=True,
     ):
       st.session_state[current_selected_key] = date_str
       st.rerun()
 
-  # 메인 화면 영역 (선택된 HTML 본문 렌더링)
   file_path = reports_dict[current_key]
 
   try:
